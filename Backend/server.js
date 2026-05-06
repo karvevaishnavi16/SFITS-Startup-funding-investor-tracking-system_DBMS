@@ -11,7 +11,7 @@ app.use(express.json());
 const db = mysql.createConnection({
   host: "localhost",
   user: "root",
-  password: "root123",
+  password: "Trupti@2007",
   database: "SFITS_DBMS_PRJ",
 });
 
@@ -68,6 +68,12 @@ db.connect((err) => {
     "STARTUP",
     "user_id",
     "ALTER TABLE STARTUP ADD COLUMN user_id INT NULL",
+  );
+
+  ensureColumn(
+    "INVESTOR",
+    "is_visible",
+    "ALTER TABLE INVESTOR ADD COLUMN is_visible TINYINT(1) DEFAULT 1",
   );
 
   // Seed INDUSTRY table if empty///////////////////////
@@ -413,21 +419,87 @@ app.post("/addFunding", (req, res) => {
   const { startup_id, round_type, round_date, valuation, total_amount_raised } =
     req.body;
 
-  const round_id = generateId("R");
-
+  // Get all existing funding rounds for this startup
   db.query(
-    `INSERT INTO FUNDING_ROUND VALUES (?, ?, ?, ?, ?, ?)`,
-    [
-      round_id,
-      round_type,
-      new Date(round_date).toISOString().slice(0, 10),
-      valuation,
-      total_amount_raised,
-      startup_id,
-    ],
-    (err) => {
+    `SELECT round_type, round_date FROM FUNDING_ROUND WHERE startup_id = ? ORDER BY round_date ASC`,
+    [startup_id],
+    (err, existingRounds) => {
       if (err) return res.status(500).send(err.sqlMessage);
-      res.send("Funding added");
+
+      const newDate = new Date(round_date);
+      const roundOrder = [
+        "Pre-Seed",
+        "Seed",
+        "Series A",
+        "Series B",
+        "Series C",
+      ];
+      const newRoundIndex = roundOrder.indexOf(round_type);
+
+      // Validate date constraints
+      if (existingRounds.length > 0) {
+        // Find the latest existing round date
+        const latestExistingDate = new Date(
+          Math.max(...existingRounds.map((r) => new Date(r.round_date))),
+        );
+
+        // New round must be on or after the latest existing round
+        if (newDate < latestExistingDate) {
+          return res
+            .status(400)
+            .send(
+              `New round date must be on or after the latest existing round (${latestExistingDate.toISOString().split("T")[0]})`,
+            );
+        }
+
+        // If adding an earlier stage round, check against later stage rounds
+        const laterRounds = existingRounds.filter(
+          (r) => roundOrder.indexOf(r.round_type) > newRoundIndex,
+        );
+
+        if (laterRounds.length > 0) {
+          const earliestLaterRoundDate = new Date(
+            Math.min(...laterRounds.map((r) => new Date(r.round_date))),
+          );
+
+          if (newDate > earliestLaterRoundDate) {
+            return res
+              .status(400)
+              .send(
+                `${round_type} round (earlier stage) must be on or before the earliest later round (${earliestLaterRoundDate.toISOString().split("T")[0]})`,
+              );
+          }
+        }
+      }
+
+      const round_id = generateId("R");
+
+      db.query(
+        `INSERT INTO FUNDING_ROUND VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          round_id,
+          round_type,
+          new Date(round_date).toISOString().slice(0, 10),
+          valuation,
+          total_amount_raised,
+          startup_id,
+        ],
+        (err) => {
+          if (err) return res.status(500).send(err.sqlMessage);
+          res.send("Funding added");
+        },
+      );
+    },
+  );
+});
+
+app.get("/fundingRounds/:startup_id", (req, res) => {
+  db.query(
+    `SELECT round_type, round_date FROM FUNDING_ROUND WHERE startup_id = ? ORDER BY round_date ASC`,
+    [req.params.startup_id],
+    (err, result) => {
+      if (err) return res.status(500).send(err.sqlMessage);
+      res.json(result);
     },
   );
 });
@@ -454,6 +526,7 @@ app.get("/investors", (req, res) => {
   db.query(
     `SELECT investor_id, investor_name, firm_name, investor_type, country
      FROM INVESTOR
+     WHERE is_visible = 1
      ORDER BY investor_name`,
     (err, result) => {
       if (err) return res.status(500).send(err.sqlMessage);
@@ -473,6 +546,35 @@ app.post("/addInvestor", (req, res) => {
     (err) => {
       if (err) return res.status(500).send(err.sqlMessage);
       res.send("Investor added");
+    },
+  );
+});
+
+app.put("/updateInvestor", (req, res) => {
+  const { id, name, firm, type, country } = req.body;
+
+  db.query(
+    `UPDATE INVESTOR
+     SET investor_name = ?, firm_name = ?, investor_type = ?, country = ?
+     WHERE investor_id = ?`,
+    [name, firm, type, country, id],
+    (err) => {
+      if (err) return res.status(500).send(err.sqlMessage);
+      res.send("Investor updated");
+    },
+  );
+});
+
+app.delete("/deleteInvestor/:id", (req, res) => {
+  const { id } = req.params;
+
+  // Hide the investor instead of deleting (soft delete)
+  db.query(
+    `UPDATE INVESTOR SET is_visible = 0 WHERE investor_id = ?`,
+    [id],
+    (err) => {
+      if (err) return res.status(500).send(err.sqlMessage);
+      res.send("Investor hidden successfully");
     },
   );
 });
@@ -775,18 +877,24 @@ app.get("/history/:startup_id", (req, res) => {
                   const startup = startupRes[0];
                   const historyRows = [];
                   const ownership = new Map();
-                  const roundInvestments = investments.reduce((acc, investment) => {
-                    if (!acc[investment.round_id]) acc[investment.round_id] = [];
-                    acc[investment.round_id].push(investment);
-                    return acc;
-                  }, {});
+                  const roundInvestments = investments.reduce(
+                    (acc, investment) => {
+                      if (!acc[investment.round_id])
+                        acc[investment.round_id] = [];
+                      acc[investment.round_id].push(investment);
+                      return acc;
+                    },
+                    {},
+                  );
 
                   founders.forEach((founder) => {
                     ownership.set(`Founder:${founder.founder_id}`, {
                       stakeholder_id: founder.founder_id,
                       stakeholder: founder.founder_name,
                       stakeholder_type: "Founder",
-                      stakeholder_label: normalizeFounderLabel(founder.founder_role),
+                      stakeholder_label: normalizeFounderLabel(
+                        founder.founder_role,
+                      ),
                       equity_percentage: Number(founder.initial_equity) || 0,
                     });
                   });
@@ -909,7 +1017,10 @@ app.get("/history/:startup_id", (req, res) => {
     const normalizedRole = roleText.toLowerCase();
 
     if (!normalizedRole) return "Founder";
-    if (normalizedRole.includes("co-founder") || normalizedRole.includes("cofounder")) {
+    if (
+      normalizedRole.includes("co-founder") ||
+      normalizedRole.includes("cofounder")
+    ) {
       return roleText;
     }
     if (normalizedRole.includes("founder")) {

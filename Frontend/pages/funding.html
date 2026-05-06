@@ -179,7 +179,7 @@
               />
             </div>
             <div class="flex items-end">
-              <button class="btn btn-gradient w-full">
+              <button type="submit" class="btn btn-gradient w-full">
                 <i class="ri-bank-card-line"></i> Add Round
               </button>
             </div>
@@ -275,6 +275,65 @@
 
         localStorage.setItem("startup_id", startup_id);
 
+        // Validate date constraints before submitting
+        const round_type = document.getElementById("round_type").value;
+        const round_date = document.getElementById("date").value;
+
+        if (!round_type || !round_date) {
+          alert("Please select round type and date");
+          return;
+        }
+
+        // Get existing rounds for this startup
+        const roundsRes = await fetch(
+          `http://localhost:5000/fundingRounds/${startup_id}`,
+        );
+        const existingRounds = await roundsRes.json();
+
+        const newDate = new Date(round_date);
+        const roundOrder = [
+          "Pre-Seed",
+          "Seed",
+          "Series A",
+          "Series B",
+          "Series C",
+        ];
+        const newRoundIndex = roundOrder.indexOf(round_type);
+
+        // Check date constraints
+        if (existingRounds.length > 0) {
+          // Find the latest existing round date
+          const latestExistingDate = new Date(
+            Math.max(...existingRounds.map((r) => new Date(r.round_date))),
+          );
+
+          // New round must be on or after the latest existing round
+          if (newDate < latestExistingDate) {
+            alert(
+              `Date error: New round date must be on or after the latest existing round (${latestExistingDate.toISOString().split("T")[0]})`,
+            );
+            return;
+          }
+
+          // If adding an earlier stage round, check against later stage rounds
+          const laterRounds = existingRounds.filter(
+            (r) => roundOrder.indexOf(r.round_type) > newRoundIndex,
+          );
+
+          if (laterRounds.length > 0) {
+            const earliestLaterRoundDate = new Date(
+              Math.min(...laterRounds.map((r) => new Date(r.round_date))),
+            );
+
+            if (newDate > earliestLaterRoundDate) {
+              alert(
+                `Date error: ${round_type} round (earlier stage) must be on or before the earliest later round (${earliestLaterRoundDate.toISOString().split("T")[0]})`,
+              );
+              return;
+            }
+          }
+        }
+
         const res = await fetch("http://localhost:5000/addFunding", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -323,24 +382,38 @@
         });
       }
     </script>
-  <script>
-(function() {
-  var name = localStorage.getItem("username") || "User";
-  var role = localStorage.getItem("role") || "Member";
-  var initials = name.split(" ").map(function(w){return w[0]||"";}).join("").slice(0,2).toUpperCase();
-  var brand = document.querySelector(".sidebar-brand");
-  if (brand) {
-    var chip = document.createElement("div");
-    chip.className = "sidebar-user-chip";
-    chip.innerHTML = "<div class=\"sidebar-user-avatar\">" + initials + "</div><div class=\"sidebar-user-info\"><div class=\"sidebar-user-name\">" + name + "</div><div class=\"sidebar-user-role\">" + role + "</div></div>";
-    var title = brand.querySelector(".sidebar-title");
-    if (title && title.nextSibling) {
-      brand.insertBefore(chip, title.nextSibling);
-    } else {
-      brand.appendChild(chip);
-    }
-  }
-})();
-</script>
-</body>
+    <script>
+      (function () {
+        var name = localStorage.getItem("username") || "User";
+        var role = localStorage.getItem("role") || "Member";
+        var initials = name
+          .split(" ")
+          .map(function (w) {
+            return w[0] || "";
+          })
+          .join("")
+          .slice(0, 2)
+          .toUpperCase();
+        var brand = document.querySelector(".sidebar-brand");
+        if (brand) {
+          var chip = document.createElement("div");
+          chip.className = "sidebar-user-chip";
+          chip.innerHTML =
+            '<div class="sidebar-user-avatar">' +
+            initials +
+            '</div><div class="sidebar-user-info"><div class="sidebar-user-name">' +
+            name +
+            '</div><div class="sidebar-user-role">' +
+            role +
+            "</div></div>";
+          var title = brand.querySelector(".sidebar-title");
+          if (title && title.nextSibling) {
+            brand.insertBefore(chip, title.nextSibling);
+          } else {
+            brand.appendChild(chip);
+          }
+        }
+      })();
+    </script>
+  </body>
 </html>
