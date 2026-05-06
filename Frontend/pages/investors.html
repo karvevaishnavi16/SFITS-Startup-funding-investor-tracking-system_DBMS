@@ -175,14 +175,23 @@
         const data = await res.json();
         const table = document.getElementById("investorTable");
         table.innerHTML = "";
-        if (data.length === 0) {
-          table.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--text-muted);">No investors yet</td></tr>`;
+        
+        if (!data || data.length === 0) {
+          table.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--text-muted);">No investors in the master database</td></tr>`;
           return;
         }
+
         data.forEach((i) => {
-          table.innerHTML += `<tr><td>${i.investor_name}</td><td>${i.firm_name}</td><td><span class="badge badge-teal">${i.investor_type}</span></td><td>${i.country}</td></tr>`;
+          table.innerHTML += `
+            <tr>
+              <td>${i.investor_name}</td>
+              <td>${i.firm_name}</td>
+              <td>${i.investor_type}</td>
+              <td>${i.country}</td>
+            </tr>`;
         });
       }
+
       loadInvestors();
     </script>
   <script>
