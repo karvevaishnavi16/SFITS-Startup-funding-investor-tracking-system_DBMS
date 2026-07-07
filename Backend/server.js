@@ -1,18 +1,38 @@
 // ================= IMPORTS =================
+require("dotenv").config();
 const express = require("express");
 const mysql = require("mysql2");
 const cors = require("cors");
+const bcrypt = require("bcrypt");
+const crypto = require("crypto");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ================= AUTH MIDDLEWARE =================
+const sessions = new Map();
+
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const token = authHeader.split(" ")[1];
+  const user = sessions.get(token);
+  if (!user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  req.user = user;
+  next();
+}
+
 // ================= DB =================
 const db = mysql.createConnection({
-  host: "localhost",
-  user: "root",
-  password: "Trupti@2007",
-  database: "SFITS_DBMS_PRJ",
+  host: process.env.DB_HOST || "localhost",
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME || "SFITS_DBMS_PRJ",
 });
 
 db.connect((err) => {
@@ -76,6 +96,9 @@ db.connect((err) => {
     "ALTER TABLE INVESTOR ADD COLUMN is_visible TINYINT(1) DEFAULT 1",
   );
 
+  // Γ£à ONE-TIME FIX: Make sure all existing investors are visible
+  db.query("UPDATE INVESTOR SET is_visible = 1 WHERE is_visible IS NULL OR is_visible = 0");
+
   // Seed INDUSTRY table if empty///////////////////////
   db.query("SELECT COUNT(*) AS cnt FROM INDUSTRY", (err, res) => {
     if (err)
@@ -100,9 +123,6 @@ function isValidEmail(email) {
 }
 
 // ================= HELPER =================
-function generateId(prefix) {
-  return prefix + Math.floor(1000 + Math.random() * 9000);
-}
 
 // ================= AUTH =================
 app.post("/signup", (req, res) => {
@@ -112,14 +132,19 @@ app.post("/signup", (req, res) => {
     return res.status(400).send("Invalid email address.");
   }
 
-  db.query(
-    "INSERT INTO USERS (username, email, password, role) VALUES (?, ?, ?, ?)",
-    [username, email, password, role],
-    (err) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.send("Signup successful");
-    },
-  );
+  const saltRounds = 10;
+  bcrypt.hash(password, saltRounds, (err, hash) => {
+    if (err) return res.status(500).send("Error hashing password.");
+
+    db.query(
+      "INSERT INTO USERS (username, email, password, role) VALUES (?, ?, ?, ?)",
+      [username, email, hash, role],
+      (err) => {
+        if (err) return res.status(500).send(err.sqlMessage);
+        res.send("Signup successful");
+      }
+    );
+  });
 });
 
 app.post("/login", (req, res) => {
@@ -133,14 +158,21 @@ app.post("/login", (req, res) => {
     `SELECT u.*, i.investor_id
      FROM USERS u
      LEFT JOIN INVESTOR i ON u.user_id = i.user_id
-     WHERE u.email = ? AND u.password = ?`,
-    [email, password],
+     WHERE u.email = ?`,
+    [email],
     (err, result) => {
       if (err) return res.status(500).send(err.sqlMessage || "Login failed");
 
-      if (result.length === 0) return res.status(401).send("Invalid");
+      if (result.length === 0) return res.status(401).send("Invalid email or password");
 
       const user = result[0];
+
+      bcrypt.compare(password, user.password, (err, isMatch) => {
+        if (err) return res.status(500).send("Error comparing passwords");
+        
+        if (!isMatch) {
+          return res.status(401).send("Invalid email or password");
+        }
 
       if (user.email) {
         db.query(
@@ -154,11 +186,15 @@ app.post("/login", (req, res) => {
       }
 
       const sendLogin = (investorId) => {
+        const token = crypto.randomBytes(32).toString('hex');
+        sessions.set(token, { user_id: user.user_id, role: user.role });
+        
         res.json({
           user_id: user.user_id,
           username: user.username,
           role: user.role,
           investor_id: investorId || null,
+          token: token
         });
       };
 
@@ -193,12 +229,13 @@ app.post("/login", (req, res) => {
       }
 
       sendLogin(user.investor_id);
+      });
     },
   );
 });
 
 // ================= STARTUPS =================
-app.post("/addStartup", (req, res) => {
+app.post("/addStartup", requireAuth, (req, res) => {
   const {
     startup_name,
     founded_year,
@@ -210,12 +247,9 @@ app.post("/addStartup", (req, res) => {
     user_id,
   } = req.body;
 
-  const startup_id = generateId("S");
-
   db.query(
-    `INSERT INTO STARTUP VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO STARTUP (startup_name, founded_year, stage, city, state, country, industry_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      startup_id,
       startup_name,
       founded_year,
       stage,
@@ -249,7 +283,7 @@ app.get("/startups/:user_id", (req, res) => {
 });
 
 // ================= FOUNDERS =================
-app.post("/addFounder", (req, res) => {
+app.post("/addFounder", requireAuth, (req, res) => {
   const { founders, startup_id } = req.body;
 
   if (!Array.isArray(founders) || founders.length === 0) {
@@ -299,16 +333,15 @@ app.post("/addFounder", (req, res) => {
             let round_id;
 
             if (roundRes.length === 0) {
-              round_id = generateId("R");
-
               db.query(
                 `INSERT INTO FUNDING_ROUND 
-             (round_id, round_type, round_date, valuation, total_amount_raised, startup_id)
-             VALUES (?, 'Initial', CURDATE(), 0, 0, ?)`,
-                [round_id, startup_id],
-                (err2) => {
+             (round_type, round_date, valuation, total_amount_raised, startup_id)
+             VALUES ('Initial', CURDATE(), 0, 0, ?)`,
+                [startup_id],
+                (err2, insertRes) => {
                   if (err2) return res.status(500).send(err2.sqlMessage);
 
+                  let round_id = insertRes.insertId;
                   insertAllFounders(round_id);
                 },
               );
@@ -322,8 +355,6 @@ app.post("/addFounder", (req, res) => {
               let completed = 0;
 
               founders.forEach((f) => {
-                const founder_id = generateId("F");
-
                 // Link the founder to an existing user account by email so the co-founder
                 // can see the startup when they log in.
                 db.query(
@@ -338,10 +369,9 @@ app.post("/addFounder", (req, res) => {
 
                     db.query(
                       `INSERT INTO FOUNDER 
-                   (founder_id, founder_name, founder_email, founder_role, initial_equity, startup_id, user_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                   (founder_name, founder_email, founder_role, initial_equity, startup_id, user_id)
+                   VALUES (?, ?, ?, ?, ?, ?)`,
                       [
-                        founder_id,
                         f.name,
                         founderEmail,
                         f.role,
@@ -349,18 +379,18 @@ app.post("/addFounder", (req, res) => {
                         startup_id,
                         founderUserId,
                       ],
-                      (err2) => {
+                      (err2, founderRes) => {
                         if (err2) return res.status(500).send(err2.sqlMessage);
+                        const founder_id = founderRes.insertId;
 
-                        // Γ£à insert into EQUITY_HISTORY (FIXED)
+                        // ✅ insert into EQUITY_HISTORY
                         db.query(
                           `INSERT INTO EQUITY_HISTORY
-                       (ownership_id, startup_id, round_id, stakeholder_type, stakeholder_id, equity_percentage, recorded_at)
-                       VALUES (?, ?, ?, 'Founder', ?, ?, ?)`,
+                       (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at)
+                       VALUES (?, ?, ?, NULL, ?, ?)`,
                           [
-                            generateId("H"),
                             startup_id,
-                            round_id, // Γ£à dynamic (NO R0)
+                            round_id, // ✅ dynamic
                             founder_id,
                             f.equity,
                             snapshotTime,
@@ -415,7 +445,7 @@ app.get("/founders/:user_id", (req, res) => {
 });
 
 // ================= FUNDING =================
-app.post("/addFunding", (req, res) => {
+app.post("/addFunding", requireAuth, (req, res) => {
   const { startup_id, round_type, round_date, valuation, total_amount_raised } =
     req.body;
 
@@ -472,12 +502,9 @@ app.post("/addFunding", (req, res) => {
         }
       }
 
-      const round_id = generateId("R");
-
       db.query(
-        `INSERT INTO FUNDING_ROUND VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO FUNDING_ROUND (round_type, round_date, valuation, total_amount_raised, startup_id) VALUES (?, ?, ?, ?, ?)`,
         [
-          round_id,
           round_type,
           new Date(round_date).toISOString().slice(0, 10),
           valuation,
@@ -535,14 +562,14 @@ app.get("/investors", (req, res) => {
   );
 });
 
-app.post("/addInvestor", (req, res) => {
+app.post("/addInvestor", requireAuth, (req, res) => {
   const { name, firm, type, country } = req.body;
 
   db.query(
     `INSERT INTO INVESTOR
-     (investor_id, investor_name, firm_name, investor_type, country)
-     VALUES (?, ?, ?, ?, ?)`,
-    [generateId("I"), name, firm, type, country],
+     (investor_name, firm_name, investor_type, country)
+     VALUES (?, ?, ?, ?)`,
+    [name, firm, type, country],
     (err) => {
       if (err) return res.status(500).send(err.sqlMessage);
       res.send("Investor added");
@@ -550,7 +577,7 @@ app.post("/addInvestor", (req, res) => {
   );
 });
 
-app.put("/updateInvestor", (req, res) => {
+app.put("/updateInvestor", requireAuth, (req, res) => {
   const { id, name, firm, type, country } = req.body;
 
   db.query(
@@ -565,7 +592,7 @@ app.put("/updateInvestor", (req, res) => {
   );
 });
 
-app.delete("/deleteInvestor/:id", (req, res) => {
+app.delete("/deleteInvestor/:id", requireAuth, (req, res) => {
   const { id } = req.params;
 
   // Hide the investor instead of deleting (soft delete)
@@ -602,7 +629,7 @@ app.get("/investments/:user_id", (req, res) => {
 });
 
 // ================= INVESTMENT =================
-app.post("/addInvestment", (req, res) => {
+app.post("/addInvestment", requireAuth, (req, res) => {
   const {
     round_id,
     user_id,
@@ -612,209 +639,154 @@ app.post("/addInvestment", (req, res) => {
     country,
     amount,
     equity,
+    deal_reference
   } = req.body;
 
   const equityNum = Number(equity);
-
   console.log("Incoming Investment:", req.body);
 
-  // 1∩╕ÅΓâú Get or create investor
-  db.query(
-    "SELECT investor_id FROM INVESTOR WHERE user_id=? OR investor_id=?",
-    [user_id, providedInvestorId || null],
-    (err, invRes) => {
-      if (err) return res.status(500).send(err.sqlMessage);
+  db.beginTransaction((err) => {
+    if (err) return res.status(500).send(err.sqlMessage);
 
-      let investor_id;
+    const rollbackAndSend = (error) => {
+      db.rollback(() => {
+        res.status(500).send(error.sqlMessage || error.message || error);
+      });
+    };
 
-      if (invRes.length === 0) {
-        investor_id = generateId("I");
+    db.query(
+      "SELECT investor_id FROM INVESTOR WHERE user_id=? OR investor_id=?",
+      [user_id, providedInvestorId || null],
+      (err, invRes) => {
+        if (err) return rollbackAndSend(err);
 
-        db.query(
-          `INSERT INTO INVESTOR 
-           (investor_id, investor_name, firm_name, country, user_id)
-           VALUES (?, ?, ?, ?, ?)`,
-          [
-            investor_id,
-            username || "Investor",
-            firm_name || "Individual",
-            country || "India",
-            user_id,
-          ],
-          (err2) => {
-            if (err2) return res.status(500).send(err2.sqlMessage);
-            proceed(investor_id);
-          },
-        );
-      } else {
-        investor_id = invRes[0].investor_id;
-        proceed(investor_id);
-      }
+        let getInvestorPromise;
+        if (invRes.length === 0) {
+          getInvestorPromise = new Promise((resolve, reject) => {
+            db.query(
+              `INSERT INTO INVESTOR (investor_name, firm_name, country, user_id) VALUES (?, ?, ?, ?)`,
+              [username || "Investor", firm_name || "Individual", country || "India", user_id],
+              (err2, result) => {
+                if (err2) reject(err2);
+                else resolve(result.insertId);
+              }
+            );
+          });
+        } else {
+          getInvestorPromise = Promise.resolve(invRes[0].investor_id);
+        }
 
-      // ================= MAIN LOGIC =================
-      function proceed(investor_id) {
-        db.query(
-          "SELECT startup_id FROM FUNDING_ROUND WHERE round_id=?",
-          [round_id],
-          (err, r) => {
-            if (err) return res.status(500).send(err.sqlMessage);
-            if (r.length === 0) return res.status(400).send("Invalid round");
+        getInvestorPromise
+          .then((investor_id) => {
+            db.query("SELECT startup_id FROM FUNDING_ROUND WHERE round_id=?", [round_id], (err, r) => {
+              if (err) return rollbackAndSend(err);
+              if (r.length === 0) return rollbackAndSend("Invalid round");
 
-            const startup_id = r[0].startup_id;
+              const startup_id = r[0].startup_id;
 
-            // ≡ƒöÑ ONE SNAPSHOT TIME FOR ALL
-            db.query("SELECT NOW() as now", (err, timeRes) => {
-              if (err) return res.status(500).send(err.sqlMessage);
+              db.query("SELECT NOW() as now", (err, timeRes) => {
+                if (err) return rollbackAndSend(err);
+                const snapshotTime = timeRes[0].now;
 
-              const snapshotTime = timeRes[0].now;
+                db.query(
+                  `SELECT founder_id, investor_id, equity_percentage
+                   FROM (
+                     SELECT *,
+                            ROW_NUMBER() OVER (
+                              PARTITION BY COALESCE(founder_id, investor_id)
+                              ORDER BY recorded_at DESC
+                            ) as rn
+                     FROM EQUITY_HISTORY
+                     WHERE startup_id=?
+                   ) t
+                   WHERE rn = 1`,
+                  [startup_id],
+                  (err, lastData) => {
+                    if (err) return rollbackAndSend(err);
 
-              // 2∩╕ÅΓâú Get last equity snapshot
-              db.query(
-                `SELECT stakeholder_id, stakeholder_type, equity_percentage
-                  FROM (
-                    SELECT *,
-                          ROW_NUMBER() OVER (
-                            PARTITION BY stakeholder_id
-                            ORDER BY recorded_at DESC
-                          ) as rn
-                    FROM EQUITY_HISTORY
-                    WHERE startup_id=?
-                  ) t
-                  WHERE rn = 1`,
-                [startup_id],
-                (err, lastData) => {
-                  if (err) return res.status(500).send(err.sqlMessage);
+                    const factor = (100 - equityNum) / 100;
+                    let historyQueries = [];
 
-                  const factor = (100 - equityNum) / 100;
-
-                  console.log("Previous Equity:", lastData);
-
-                  // Γ£à FIRST INVESTMENT CASE
-                  if (!lastData || lastData.length === 0) {
-                    db.query(
-                      "SELECT founder_id, initial_equity FROM FOUNDER WHERE startup_id=?",
-                      [startup_id],
-                      (err3, founders) => {
-                        if (err3) return res.status(500).send(err3.sqlMessage);
-
-                        if (!founders || founders.length === 0) {
-                          insertInvestorHistory(insertInvestment);
-                          return;
-                        }
-
-                        let founderInserts = 0;
-                        founders.forEach((founder) => {
-                          const dilutedEquity = founder.initial_equity * factor;
-                          db.query(
-                            `INSERT INTO EQUITY_HISTORY 
-                             (ownership_id, startup_id, round_id, stakeholder_type, stakeholder_id, equity_percentage, recorded_at)
-                             VALUES (?, ?, ?, 'Founder', ?, ?, ?)`,
-                            [
-                              generateId("H"),
-                              startup_id,
-                              round_id,
-                              founder.founder_id,
-                              Number(dilutedEquity.toFixed(4)),
-                              snapshotTime,
-                            ],
-                            (err4) => {
-                              if (err4)
-                                return res.status(500).send(err4.sqlMessage);
-                              founderInserts++;
-                              if (founderInserts === founders.length) {
-                                insertInvestorHistory(insertInvestment);
-                              }
-                            },
-                          );
-                        });
-                      },
-                    );
-                  } else {
-                    let completed = 0;
-                    let investorHandled = false;
-
-                    lastData.forEach((row) => {
-                      let newEquity = row.equity_percentage * factor;
-
-                      if (
-                        row.stakeholder_type === "Investor" &&
-                        row.stakeholder_id === investor_id
-                      ) {
-                        newEquity += equityNum; // add after dilution
-                        investorHandled = true;
-                      }
-
+                    if (!lastData || lastData.length === 0) {
                       db.query(
-                        `INSERT INTO EQUITY_HISTORY 
-                         (ownership_id, startup_id, round_id, stakeholder_type, stakeholder_id, equity_percentage, recorded_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                        [
-                          generateId("H"),
-                          startup_id,
-                          round_id,
-                          row.stakeholder_type,
-                          row.stakeholder_id,
-                          Number(newEquity.toFixed(4)),
-                          snapshotTime,
-                        ],
-                        (err4) => {
-                          if (err4)
-                            return res.status(500).send(err4.sqlMessage);
+                        "SELECT founder_id, initial_equity FROM FOUNDER WHERE startup_id=?",
+                        [startup_id],
+                        (err3, founders) => {
+                          if (err3) return rollbackAndSend(err3);
 
-                          completed++;
-                          if (completed === lastData.length) {
-                            if (!investorHandled) {
-                              insertInvestorHistory(insertInvestment);
-                            } else {
-                              insertInvestment();
-                            }
+                          if (founders && founders.length > 0) {
+                            founders.forEach((founder) => {
+                              historyQueries.push({
+                                query: `INSERT INTO EQUITY_HISTORY (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at) VALUES (?, ?, ?, NULL, ?, ?)`,
+                                values: [startup_id, round_id, founder.founder_id, Number((founder.initial_equity * factor).toFixed(4)), snapshotTime],
+                              });
+                            });
                           }
-                        },
+                          // Add the new investor
+                          historyQueries.push({
+                            query: `INSERT INTO EQUITY_HISTORY (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at) VALUES (?, ?, NULL, ?, ?, ?)`,
+                            values: [startup_id, round_id, investor_id, equityNum, snapshotTime],
+                          });
+                          executeHistoryQueries();
+                        }
                       );
-                    });
-                  }
+                    } else {
+                      let investorHandled = false;
+                      lastData.forEach((row) => {
+                        let newEquity = row.equity_percentage * factor;
+                        if (row.investor_id === investor_id) {
+                          newEquity += equityNum;
+                          investorHandled = true;
+                        }
+                        historyQueries.push({
+                          query: `INSERT INTO EQUITY_HISTORY (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at) VALUES (?, ?, ?, ?, ?, ?)`,
+                          values: [startup_id, round_id, row.founder_id, row.investor_id, Number(newEquity.toFixed(4)), snapshotTime],
+                        });
+                      });
 
-                  function insertInvestorHistory(callback) {
-                    db.query(
-                      `INSERT INTO EQUITY_HISTORY 
-                       (ownership_id, startup_id, round_id, stakeholder_type, stakeholder_id, equity_percentage, recorded_at)
-                       VALUES (?, ?, ?, 'Investor', ?, ?, ?)`,
-                      [
-                        generateId("H"),
-                        startup_id,
-                        round_id,
-                        investor_id,
-                        equityNum,
-                        snapshotTime,
-                      ],
-                      callback,
-                    );
-                  }
+                      if (!investorHandled) {
+                        historyQueries.push({
+                          query: `INSERT INTO EQUITY_HISTORY (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at) VALUES (?, ?, NULL, ?, ?, ?)`,
+                          values: [startup_id, round_id, investor_id, equityNum, snapshotTime],
+                        });
+                      }
+                      executeHistoryQueries();
+                    }
 
-                  // Γ¥î REMOVED DUPLICATE INSERT (THIS WAS YOUR BUG)
-                },
-              );
+                    function executeHistoryQueries() {
+                      Promise.all(
+                        historyQueries.map(
+                          (q) =>
+                            new Promise((res, rej) =>
+                              db.query(q.query, q.values, (e) => (e ? rej(e) : res()))
+                            )
+                        )
+                      )
+                        .then(() => {
+                          db.query(
+                            `INSERT INTO INVESTMENT (round_id, investor_id, amount_invested, equity_acquired, deal_reference) VALUES (?, ?, ?, ?, ?)`,
+                            [round_id, investor_id, amount, equityNum, deal_reference || null],
+                            (err) => {
+                              if (err) return rollbackAndSend(err);
+
+                              db.commit((err) => {
+                                if (err) return rollbackAndSend(err);
+                                res.send("Investment added successfully");
+                              });
+                            }
+                          );
+                        })
+                        .catch((e) => rollbackAndSend(e));
+                    }
+                  }
+                );
+              });
             });
-          },
-        );
+          })
+          .catch((e) => rollbackAndSend(e));
       }
-
-      // 3∩╕ÅΓâú Store investment separately
-      function insertInvestment() {
-        db.query(
-          `INSERT INTO INVESTMENT 
-           (investment_id, round_id, investor_id, amount_invested, equity_acquired)
-           VALUES (?, ?, ?, ?, ?)`,
-          [generateId("IV"), round_id, investor_id, amount, equity],
-          (err) => {
-            if (err) return res.status(500).send(err.sqlMessage);
-
-            res.send("Investment added successfully");
-          },
-        );
-      }
-    },
-  );
+    );
+  });
 });
 // ================= CAP TABLE =================
 app.get("/history/:startup_id", (req, res) => {
@@ -1075,32 +1047,76 @@ app.get("/capTable/:startup_id", (req, res) => {
   db.query(
     `SELECT
       COALESCE(f.founder_name, i.investor_name) AS stakeholder,
-      eh.stakeholder_type,
+      CASE WHEN eh.founder_id IS NOT NULL THEN 'Founder' ELSE 'Investor' END AS stakeholder_type,
       CASE
-        WHEN eh.stakeholder_type = 'Founder' THEN
+        WHEN eh.founder_id IS NOT NULL THEN
           CASE
             WHEN TRIM(COALESCE(f.founder_role, '')) = '' THEN 'Founder'
             WHEN LOWER(COALESCE(f.founder_role, '')) LIKE '%co-founder%' OR LOWER(COALESCE(f.founder_role, '')) LIKE '%cofounder%' THEN f.founder_role
             WHEN LOWER(COALESCE(f.founder_role, '')) LIKE '%founder%' THEN f.founder_role
             ELSE CONCAT('Co-Founder & ', f.founder_role)
           END
-        ELSE eh.stakeholder_type
+        ELSE 'Investor'
       END AS stakeholder_label,
       SUM(eh.equity_percentage) AS equity_percentage
     FROM (
       SELECT *,
         ROW_NUMBER() OVER (
-          PARTITION BY stakeholder_id, stakeholder_type
+          PARTITION BY COALESCE(founder_id, investor_id), (CASE WHEN founder_id IS NOT NULL THEN 'Founder' ELSE 'Investor' END)
           ORDER BY recorded_at DESC
         ) AS rn
       FROM EQUITY_HISTORY
       WHERE startup_id=?
     ) eh
-    LEFT JOIN FOUNDER f ON eh.stakeholder_id = f.founder_id
-    LEFT JOIN INVESTOR i ON eh.stakeholder_id = i.investor_id
+    LEFT JOIN FOUNDER f ON eh.founder_id = f.founder_id
+    LEFT JOIN INVESTOR i ON eh.investor_id = i.investor_id
     WHERE eh.rn = 1
-    GROUP BY stakeholder, eh.stakeholder_type, stakeholder_label`,
+    GROUP BY stakeholder, stakeholder_type, stakeholder_label`,
     [startup_id],
+    (err2, result) => {
+      if (err2) return res.status(500).send(err2.sqlMessage);
+      res.json(result);
+    },
+  );
+});
+
+app.get("/capTableAtDate/:startup_id", (req, res) => {
+  const startup_id = req.params.startup_id;
+  const asOfDate = req.query.asOfDate; // YYYY-MM-DD format expected
+
+  if (!asOfDate) {
+    return res.status(400).send("asOfDate query parameter is required.");
+  }
+
+  db.query(
+    `SELECT
+      COALESCE(f.founder_name, i.investor_name) AS stakeholder,
+      CASE WHEN eh.founder_id IS NOT NULL THEN 'Founder' ELSE 'Investor' END AS stakeholder_type,
+      CASE
+        WHEN eh.founder_id IS NOT NULL THEN
+          CASE
+            WHEN TRIM(COALESCE(f.founder_role, '')) = '' THEN 'Founder'
+            WHEN LOWER(COALESCE(f.founder_role, '')) LIKE '%co-founder%' OR LOWER(COALESCE(f.founder_role, '')) LIKE '%cofounder%' THEN f.founder_role
+            WHEN LOWER(COALESCE(f.founder_role, '')) LIKE '%founder%' THEN f.founder_role
+            ELSE CONCAT('Co-Founder & ', f.founder_role)
+          END
+        ELSE 'Investor'
+      END AS stakeholder_label,
+      SUM(eh.equity_percentage) AS equity_percentage
+    FROM (
+      SELECT *,
+        ROW_NUMBER() OVER (
+          PARTITION BY COALESCE(founder_id, investor_id), (CASE WHEN founder_id IS NOT NULL THEN 'Founder' ELSE 'Investor' END)
+          ORDER BY recorded_at DESC
+        ) AS rn
+      FROM EQUITY_HISTORY
+      WHERE startup_id=? AND DATE(recorded_at) <= ?
+    ) eh
+    LEFT JOIN FOUNDER f ON eh.founder_id = f.founder_id
+    LEFT JOIN INVESTOR i ON eh.investor_id = i.investor_id
+    WHERE eh.rn = 1
+    GROUP BY stakeholder, stakeholder_type, stakeholder_label`,
+    [startup_id, asOfDate],
     (err2, result) => {
       if (err2) return res.status(500).send(err2.sqlMessage);
       res.json(result);
@@ -1216,17 +1232,17 @@ app.get("/startupDashboard/:startup_id", (req, res) => {
       (
     SELECT COALESCE(SUM(equity_percentage),0)
     FROM (
-      SELECT stakeholder_id, stakeholder_type, equity_percentage
+      SELECT equity_percentage
       FROM (
         SELECT *,
               ROW_NUMBER() OVER (
-                PARTITION BY stakeholder_id
+                PARTITION BY founder_id
                 ORDER BY recorded_at DESC
               ) as rn
         FROM EQUITY_HISTORY
-        WHERE startup_id = s.startup_id
+        WHERE startup_id = s.startup_id AND founder_id IS NOT NULL
       ) t
-      WHERE rn = 1 AND stakeholder_type = 'Founder'
+      WHERE rn = 1
     ) latest
   ) AS founder_equity
 

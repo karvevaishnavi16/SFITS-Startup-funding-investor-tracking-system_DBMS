@@ -86,7 +86,7 @@
         </div>
         <ul class="sidebar-nav">
           <li><a href="../investor_dashboard.html"><span class="nav-icon"><i class="ri-dashboard-line"></i></span> Dashboard</a></li>
-          <li><a href="browse_startups.html"><span class="nav-icon"><i class="ri-search-line"></i></span> Browse Startups</a></li>
+          <li><a href="browse_startups.html"><span class="nav-icon"><i class="ri-search-line"></i></span> Startup Directory</a></li>
           <li><a href="invest.html" class="active"><span class="nav-icon"><i class="ri-coins-line"></i></span> Invest</a></li>
           <li><a href="my_investments.html"><span class="nav-icon"><i class="ri-bar-chart-box-line"></i></span> My Investments</a></li>
         </ul>
@@ -99,7 +99,7 @@
           <div>
             <div class="role-badge investor mb-2"><i class="ri-line-chart-line"></i> Investor Panel</div>
             <h1 class="text-2xl font-extrabold tracking-tight" style="color:var(--text-primary);">
-              Invest in <span style="background:var(--gradient-green);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Startups</span>
+              Log a New <span style="background:var(--gradient-green);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">Investment</span>
             </h1>
             <p class="text-sm mt-1" style="color:var(--text-muted);">Select a live funding round and review all context before committing capital</p>
           </div>
@@ -134,12 +134,16 @@
                 <label for="equity">Equity % Requested</label>
                 <input id="equity" type="number" step="0.01" min="0.01" max="100" placeholder="e.g. 5" required />
               </div>
+              <div>
+                <label for="deal_reference">Deal Reference / Term Sheet ID</label>
+                <input id="deal_reference" type="text" placeholder="e.g. TS-2026-XYZ" required />
+              </div>
               <!-- Equity hint -->
               <div id="equityHint" style="display:none;font-size:0.78rem;color:var(--text-muted);padding:0.5rem 0.75rem;border-radius:10px;background:var(--bg-surface,rgba(0,0,0,0.04));border:1px solid var(--border-glass);">
                 <i class="ri-lightbulb-line"></i> <span id="equityHintText"></span>
               </div>
               <button id="submitBtn" class="btn btn-gradient btn-full" type="submit">
-                <i class="ri-send-plane-line"></i> Invest Now →
+                <i class="ri-send-plane-line"></i> Record Investment →
               </button>
             </form>
           </div>
@@ -148,9 +152,9 @@
           <div class="lg:col-span-2">
             <div class="round-context-panel">
               <div class="panel-title"><i class="ri-information-line"></i> Round Details</div>
-              <div id="contextPlaceholder">
-                <i class="ri-bar-chart-grouped-line"></i>
-                <p style="font-size:0.82rem;">Select a funding round to see detailed information</p>
+              <div id="contextPlaceholder" style="padding: 2.5rem 1rem; text-align: center; color: var(--text-muted); background: var(--bg-card); border-radius: var(--radius-lg); border: 1px dashed var(--border-glass); margin-top: 1rem;">
+                <i class="ri-search-line" style="font-size: 1.5rem; opacity: 0.5; margin-bottom: 0.5rem; display: block;"></i>
+                <p style="font-size: 0.85rem; font-weight: 500;">Select a funding round above to see valuation, investors, and terms.</p>
               </div>
               <div id="contextContent" style="display:none;">
                 <!-- Startup info -->
@@ -322,12 +326,23 @@
         const roundId = document.getElementById("round").value;
         const r       = allRoundsData.find(x => String(x.round_id) === String(roundId));
         const amount  = Number(document.getElementById("amount").value);
+        const equity  = Number(document.getElementById("equity").value);
         const hint    = document.getElementById("equityHint");
         const hintTxt = document.getElementById("equityHintText");
 
+        let messages = [];
+
         if (r && r.valuation > 0 && amount > 0) {
           const suggestedEquity = ((amount / r.valuation) * 100).toFixed(2);
-          hintTxt.textContent = `At a valuation of ${fmtMoney(r.valuation)}, ₹${amount.toLocaleString('en-IN')} ≈ ${suggestedEquity}% equity`;
+          messages.push(`At a valuation of ${fmtMoney(r.valuation)}, ₹${amount.toLocaleString('en-IN')} ≈ ${suggestedEquity}% equity.`);
+        }
+
+        if (equity > 0 && equity <= 100) {
+           messages.push(`<strong>Dilution Preview:</strong> Existing stakeholders will be diluted by ${equity}% (retaining ${100 - equity}% of their current holdings).`);
+        }
+
+        if (messages.length > 0) {
+          hintTxt.innerHTML = messages.join("<br>");
           hint.style.display = '';
         } else {
           hint.style.display = 'none';
@@ -343,8 +358,9 @@
         if (card) card.classList.add('selected');
       });
 
-      // ── Amount change ──
+      // ── Amount & Equity change ──
       document.getElementById("amount").addEventListener("input", recalcEquitySuggestion);
+      document.getElementById("equity").addEventListener("input", recalcEquitySuggestion);
 
       // ── Form submit ──
       let isSubmitting = false;
@@ -358,18 +374,22 @@
         submitBtn.innerHTML  = `<i class="ri-loader-4-line"></i> Processing…`;
 
         const round_id  = document.getElementById("round").value;
-        if (!round_id)  { alert("Please select a funding round"); isSubmitting = false; submitBtn.disabled = false; submitBtn.innerHTML = `<i class="ri-send-plane-line"></i> Invest Now →`; return; }
+        if (!round_id)  { alert("Please select a funding round"); isSubmitting = false; submitBtn.disabled = false; submitBtn.innerHTML = `<i class="ri-send-plane-line"></i> Record Investment →`; return; }
 
         const amount    = document.getElementById("amount").value;
         const equity    = document.getElementById("equity").value;
         const firm_name = document.getElementById("firm_name").value;
         const country   = document.getElementById("country").value;
+        const deal_reference = document.getElementById("deal_reference").value;
 
         try {
           const res = await fetch("http://localhost:5000/addInvestment", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ round_id, user_id, username, firm_name, country, amount, equity }),
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + localStorage.getItem("token"),
+            },
+            body: JSON.stringify({ round_id, user_id, username, firm_name, country, amount, equity, deal_reference }),
           });
           const msg = await res.text();
           if (res.ok) {
@@ -387,7 +407,7 @@
         } finally {
           isSubmitting = false;
           submitBtn.disabled  = false;
-          submitBtn.innerHTML = `<i class="ri-send-plane-line"></i> Invest Now →`;
+          submitBtn.innerHTML = `<i class="ri-send-plane-line"></i> Record Investment →`;
         }
       });
 

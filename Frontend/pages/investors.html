@@ -224,7 +224,10 @@
           const country = document.getElementById("country").value;
           const res = await fetch("http://localhost:5000/addInvestor", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + localStorage.getItem("token"),
+            },
             body: JSON.stringify({
               name,
               firm,
@@ -246,30 +249,11 @@
         const data = await res.json();
         const table = document.getElementById("investorTable");
         table.innerHTML = "";
-<<<<<<< HEAD
-        
-        if (!data || data.length === 0) {
-          table.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--text-muted);">No investors in the master database</td></tr>`;
-=======
         if (data.length === 0) {
           table.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:1.5rem;color:var(--text-muted);">No investors yet</td></tr>`;
->>>>>>> 74699aea42ab71262d471a4ee9d6c68ff9022781
           return;
         }
-
         data.forEach((i) => {
-<<<<<<< HEAD
-          table.innerHTML += `
-            <tr>
-              <td>${i.investor_name}</td>
-              <td>${i.firm_name}</td>
-              <td>${i.investor_type}</td>
-              <td>${i.country}</td>
-            </tr>`;
-        });
-      }
-
-=======
           table.innerHTML += `<tr>
             <td>${escapeHtml(i.investor_name)}</td>
             <td>${escapeHtml(i.firm_name)}</td>
@@ -331,7 +315,10 @@
 
           const res = await fetch("http://localhost:5000/updateInvestor", {
             method: "PUT",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + localStorage.getItem("token"),
+            },
             body: JSON.stringify({ id, name, firm, type, country }),
           });
 
@@ -344,7 +331,6 @@
           }
         });
 
->>>>>>> 74699aea42ab71262d471a4ee9d6c68ff9022781
       loadInvestors();
     </script>
     <script>

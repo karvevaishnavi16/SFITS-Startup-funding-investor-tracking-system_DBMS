@@ -146,6 +146,10 @@
               >
                 Ownership Distribution
               </h2>
+              <div style="margin-left: auto; display: flex; align-items: center;">
+                <label for="asOfDate" style="font-size: 0.8rem; color: var(--text-muted); margin-right: 0.5rem;">As of Date:</label>
+                <input type="date" id="asOfDate" style="padding: 0.3rem 0.5rem; border-radius: 6px; border: 1px solid var(--border-glass); background: transparent; color: var(--text-primary); font-size: 0.8rem;" />
+              </div>
             </div>
             <div class="overflow-x-auto">
               <table>
@@ -208,6 +212,12 @@
             localStorage.setItem("startup_id", e.target.value);
             loadCapTable(e.target.value);
           });
+        document
+          .getElementById("asOfDate")
+          .addEventListener("change", () => {
+            const startup_id = localStorage.getItem("startup_id");
+            if (startup_id) loadCapTable(startup_id);
+          });
       };
 
       async function loadStartups() {
@@ -233,7 +243,7 @@
       async function loadCapTable(startup_id) {
         const table = document.getElementById("capTableBody");
         if (!startup_id) {
-          table.innerHTML = `<tr><td colspan="3" class="text-center py-8" style="color:var(--text-muted);">Select a startup</td></tr>`;
+          table.innerHTML = `<tr><td colspan="3" class="text-center py-8" style="color:var(--text-muted);"><i class="ri-bar-chart-2-line" style="font-size:1.5rem; opacity:0.5; display:block; margin-bottom:0.5rem;"></i>Select a startup from the dropdown to view its cap table.</td></tr>`;
           if (chart) {
             chart.destroy();
             chart = null;
@@ -241,7 +251,9 @@
           return;
         }
         localStorage.setItem("startup_id", startup_id);
-        const res = await fetch(`http://localhost:5000/capTable/${startup_id}`);
+        const asOfDate = document.getElementById("asOfDate").value;
+        const queryParams = asOfDate ? `?asOfDate=${asOfDate}` : "";
+        const res = await fetch(`http://localhost:5000/capTableAtDate/${startup_id}${queryParams}`);
         const data = await res.json();
         table.innerHTML = "";
         if (data.length === 0) {

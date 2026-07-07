@@ -56,8 +56,8 @@
     #f093fb 100%
   );
 
-  --sidebar-founder: linear-gradient(180deg, #6366f1 0%, #4f46e5 100%);
-  --sidebar-investor: linear-gradient(180deg, #0d9488 0%, #059669 100%);
+  --sidebar-primary: linear-gradient(180deg, #6366f1 0%, #4f46e5 100%);
+  
 
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
@@ -480,10 +480,10 @@ body::before {
 }
 
 .sidebar.founder {
-  background: linear-gradient(180deg, #312e81 0%, #4338ca 40%, #3730a3 100%);
+  background: var(--sidebar-primary);
 }
 .sidebar.investor {
-  background: linear-gradient(180deg, #0f766e 0%, #0d9488 42%, #115e59 100%);
+  background: var(--sidebar-primary);
 }
 
 .sidebar > * {
@@ -930,19 +930,19 @@ body::before {
 }
 
 .stat-card.blue::before {
-  background: var(--gradient-blue);
+  background: var(--gradient-primary);
 }
 .stat-card.purple::before {
-  background: var(--gradient-purple);
+  background: var(--gradient-primary);
 }
 .stat-card.green::before {
-  background: var(--gradient-green);
+  background: var(--gradient-primary);
 }
 .stat-card.teal::before {
-  background: var(--gradient-teal);
+  background: var(--gradient-primary);
 }
 .stat-card.sunset::before {
-  background: var(--gradient-sunset);
+  background: var(--gradient-primary);
 }
 
 .stat-label {
@@ -1128,7 +1128,7 @@ button,
 }
 
 .btn-primary {
-  background: var(--gradient-fresh);
+  background: var(--gradient-primary);
   color: white;
   box-shadow: 0 2px 8px rgba(13, 148, 136, 0.25);
 }
@@ -1139,7 +1139,7 @@ button,
 }
 
 .btn-green {
-  background: var(--gradient-green);
+  background: var(--gradient-primary);
   color: white;
 }
 
@@ -1149,7 +1149,7 @@ button,
 }
 
 .btn-purple {
-  background: var(--gradient-purple);
+  background: var(--gradient-primary);
   color: white;
 }
 
@@ -1159,7 +1159,7 @@ button,
 }
 
 .btn-gradient {
-  background: var(--gradient-fresh);
+  background: var(--gradient-primary);
   color: white;
   background-size: 200% 200%;
   animation: gradientShift 4s ease infinite;
@@ -1272,7 +1272,7 @@ tbody tr.group-header td {
 .progress-fill {
   height: 100%;
   border-radius: 999px;
-  background: var(--gradient-fresh);
+  background: var(--gradient-primary);
   transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
 }
@@ -1382,7 +1382,7 @@ tbody tr.group-header td {
   align-items: center;
   justify-content: center;
   border-radius: 16px;
-  background: var(--gradient-fresh);
+  background: var(--gradient-primary);
   color: #fff;
   font-size: 1.2rem;
   font-weight: 800;
@@ -1961,7 +1961,7 @@ tbody tr.group-header td {
   font-weight: 800;
   text-align: center;
   margin-bottom: 0.5rem;
-  background: var(--gradient-fresh);
+  background: var(--gradient-primary);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -2008,7 +2008,7 @@ tbody tr.group-header td {
   }
 
   .auth-showcase h2 {
-    font-size: 2rem;
+    font-size: 2.25rem;
   }
 
   .auth-card-wrap {
@@ -2047,7 +2047,7 @@ tbody tr.group-header td {
   font-size: 4rem;
   font-weight: 900;
   letter-spacing: -3px;
-  background: var(--gradient-fresh);
+  background: var(--gradient-primary);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -2704,7 +2704,7 @@ tbody tr.group-header td {
   bottom: 15%;
   width: 3.5px;
   border-radius: 0 4px 4px 0;
-  background: var(--gradient-fresh);
+  background: var(--gradient-primary);
 }
 
 .workspace-header-card > * {
@@ -2906,7 +2906,7 @@ textarea:focus {
 }
 
 .modal-header h2 {
-  font-size: 1.5rem;
+  font-size: 1.75rem;
   font-weight: 700;
   color: var(--text-primary);
   margin: 0;
@@ -2916,7 +2916,7 @@ textarea:focus {
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 1.5rem;
+  font-size: 1.75rem;
   cursor: pointer;
   transition: all var(--transition-base);
   display: flex;

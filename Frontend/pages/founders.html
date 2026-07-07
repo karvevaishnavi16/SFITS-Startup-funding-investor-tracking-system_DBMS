@@ -295,7 +295,10 @@
         try {
           const res = await fetch(`${API_BASE}/addFounder`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + localStorage.getItem("token"),
+            },
             body: JSON.stringify({
               startup_id,
               founders: [{ name, email, role, equity }],

@@ -1,63 +1,20 @@
-# SFITS — Startup Funding & Investor Tracking System
+# 🚀 Startup Funding & Investor Tracking System (SFITS)
 
-A full-stack web application for managing startups, funding rounds, investor ownership, and equity dilution over time — built as a DBMS mini project.
+The **system of record** for founders and investors to log funding rounds, track equity dilution, and see exactly who owns what—after every round. Designed to simplify cap table management, SFITS provides a single source of truth for your company's ownership history.
 
-When a startup raises funds from multiple investors across multiple funding rounds, tracking ownership percentages becomes increasingly complex. Each new investment leads to changes in existing ownership due to equity dilution, making it difficult to maintain accurate records over time. Without a structured system, ownership data may be overwritten or lost, preventing reliable historical analysis. The Startup Funding and Investment Tracking System (SFITS) addresses this problem by organizing data related to startups, investors, funding rounds, and investments using a structured relational database. It also maintains a complete history of ownership changes after each funding round, enabling stakeholders to accurately track and query ownership distribution at any stage, such as “Who owned how much at a specific funding round?
+> **Note:** The data seeded in this application is purely fictional and intended for demonstration purposes.
+
+---
 
 ## 🚀 What It Does
 
-| Feature             | Description                                                                              |
-| ------------------- | ---------------------------------------------------------------------------------------- |
-| **Founder Panel**   | Manage startups, add co-founders, create funding rounds, view cap table & equity history |
-| **Investor Panel**  | Browse startups, invest in live rounds, track portfolio & equity acquired                |
-| **Equity Dilution** | Automatically recalculates ownership % for all stakeholders after each investment        |
-| **Cap Table**       | Full historical snapshot of ownership across every funding round                         |
-| **Dashboard**       | Real-time stats — valuation, funding progress, investor count, founder equity            |
-
----
-
-## 🛠 Tech Stack
-
-- **Frontend** — HTML, Vanilla CSS, Tailwind CDN, Chart.js
-- **Backend** — Node.js, Express.js
-- **Database** — MySQL (relational schema with `STARTUP`, `FOUNDER`, `FUNDING_ROUND`, `INVESTMENT`, `EQUITY_HISTORY`)
-
----
-
-## ⚙️ How to Run
-
-### 1. Clone & switch branch
-
-```bash
-git clone https://github.com/karvevaishnavi16/SFITS_DBMS.git
-cd SFITS_DBMS
-git checkout final-fix
-```
-
-### 2. Install backend dependencies
-
-```bash
-cd backend
-npm install express mysql2 cors
-```
-
-### 3. Configure MySQL
-
-- Create database: `SFITS_DBMS_PRJ`
-- Default credentials in `backend/server.js`: `root` / `root123` — update if different
-
-### 4. Start the development environment
-
-```bash
-npm run dev
-```
-- This will start the **Backend** (on port 5000) and the **Frontend** (on port 3000) simultaneously.
-- The frontend will automatically open at `http://localhost:3000`.
-
-### 5. Alternative: Manual Start
-
-- **Backend only:** `npm run server`
-- **Frontend only:** `npm run client` (or open `Frontend/welcome.html` manually)
+| Feature | Description |
+| --- | --- |
+| **Cap Table Math** | Automatically recalculates ownership percentages across all stakeholders after every new investment. |
+| **Historical Auditing** | Maintains an immutable `EQUITY_HISTORY` ledger tracking all changes to ownership over time. |
+| **Secure Authentication** | Implements robust session-token auth for write operations, with bcrypt-hashed passwords. |
+| **Investor Dashboard** | Dedicated views for investors to track their portfolio value across multiple startups. |
+| **Founder Dashboard** | Dedicated views for founders to manage funding rounds and co-founder equity. |
 
 ---
 
@@ -71,3 +28,63 @@ npm run dev
 ## 🗃 Key DB Tables
 
 `USERS` → `STARTUP` → `FOUNDER` → `FUNDING_ROUND` → `INVESTMENT` → `EQUITY_HISTORY`
+
+---
+
+## 🛠 Tech Stack
+
+- **Frontend:** HTML, CSS, JavaScript, Chart.js
+- **Backend:** Node.js, Express.js
+- **Database:** MySQL
+- **Security:** `bcrypt` (password hashing), `crypto` (session tokens), `dotenv` (environment variables)
+
+---
+
+## 🚀 Setup & Installation
+
+### 1. Clone & switch branch
+
+```bash
+git clone https://github.com/karvevaishnavi16/SFITS_DBMS.git
+cd SFITS_DBMS
+git checkout final-fix
+```
+
+### 2. Install backend dependencies
+
+```bash
+cd Backend
+npm install express mysql2 cors dotenv bcrypt
+```
+
+### 3. Configure MySQL & Environment
+
+1. Create a MySQL database named `SFITS_DBMS_PRJ`.
+2. In the `Backend/` folder, copy `.env.example` to create a new `.env` file:
+   ```bash
+   cp .env.example .env
+   ```
+3. Update the `.env` file with your actual MySQL credentials:
+   ```env
+   DB_HOST=localhost
+   DB_USER=root
+   DB_PASSWORD=your_mysql_password
+   DB_NAME=SFITS_DBMS_PRJ
+   ```
+4. Run the `Database/schema.sql` script in MySQL to create the tables.
+5. Run the `Database/seed.sql` script to populate the fictional seed data (all seed user passwords are set to `pass123`).
+
+### 4. Start the development environment
+
+From the root project directory:
+```bash
+npm run dev
+```
+- This will start the **Backend** (on port 5000) and the **Frontend** (on port 3000) simultaneously.
+- The frontend will automatically open at `http://localhost:3000`.
+
+### 5. Demo Accounts
+
+You can log in with any of the fictional users from `seed.sql`. For example:
+- **Founder:** `aarav@paynest.com` / `pass123`
+- **Investor:** `rohan@northstar.com` / `pass123`
