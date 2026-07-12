@@ -2,7 +2,7 @@
 
 SFITS is a web application that helps founders and investors keep track of startup funding rounds, investments, and equity dilution. Whenever a startup raises money, the database automatically recalculates who owns what percentage of the company so you don't have to do the math manually.
 
-This project was built as a Database Management Systems (DBMS) course project to demonstrate database design, normalization, foreign keys, database triggers, and transactions.
+> **Disclaimer:** SFITS is designed to record investments that have already been finalized outside the platform. It acts as a system of record and does not facilitate live monetary transfers, legal negotiations, or fund transfers.
 
 ---
 
@@ -17,36 +17,22 @@ Tracking these changes across multiple rounds and investors on manual spreadshee
 
 ---
 
-## 🔄 How the Workflow Works
+## 👥 User Roles
+| Role | Responsibilities |
+| :--- | :--- |
+| **Founder** | Registers a startup, manages co-founders, creates funding rounds, and tracks company equity. |
+| **Investor** | Browses startups, logs investments into funding rounds, and monitors their investment portfolio. |
 
-Here is how data flows through the system:
+---
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Founder
-    actor Investor
-    participant App as Web Frontend / Express Backend
-    participant DB as MySQL Database
-
-    Founder->>App: Register Account & Startup
-    Founder->>App: Add Co-Founders with Initial Equity (Total <= 100%)
-    Founder->>App: Create a Funding Round (e.g., Series A)
-    Investor->>App: Browse Startups & Select Active Round
-    Investor->>App: Log Investment (Amount & Equity Acquired)
-    App->>DB: Start SQL Transaction
-    Note over DB: 1. Logs new investment record.<br/>2. Dilutes existing founders & investors.<br/>3. Records new equity splits in history table.<br/>4. Triggers log changes to audit table.
-    DB-->>App: Commit / Rollback (if error)
-    App-->>Founder: Show updated Cap Table & Charts
-    App-->>Investor: Show updated Portfolio Dashboard
-```
-
-1.  **Sign Up & Role Selection:** Users register as either a **Founder** or an **Investor**.
-2.  **Startup Creation:** Founders register their startup and add co-founders with their initial equity percentages.
-3.  **Launching a Round:** Founders create a funding round (e.g., Seed, Series A) with target valuations.
-4.  **Logging an Investment:** Investors browse active startups, select a funding round, and log their investment (amount invested and equity percentage acquired).
-5.  **Dilution Math (Automatic):** The backend starts a database transaction. It records the investment, reduces previous shareholders' equity proportionately to make room for the new investor, and saves the new ownership stakes.
-6.  **Real-Time Cap Table:** The updated ownership structure is immediately visible in charts and historical ledgers.
+## 🔄 Startup Investment Workflow
+1. **Founder Registration:** Founders sign up and register their startups.
+2. **Founder Setup:** Founders add co-founders and specify initial equity splits.
+3. **Round Creation:** Founders create a new funding round (e.g., Seed or Series A).
+4. **Investor Discovery:** Investors browse available startups and their active funding rounds.
+5. **Investment Entry:** Investors log an investment amount and the equity acquired.
+6. **Automatic Dilution:** The database processes the investment, automatically diluting everyone's equity and logging the changes.
+7. **Cap Table Review:** Both founders and investors view the updated cap table showing new ownership distributions.
 
 ---
 
@@ -103,6 +89,30 @@ Adding a new investment requires updating multiple tables. We use SQL transactio
 
 ---
 
+
+## ⚙️ System Architecture
+
+```mermaid
+graph TD
+    subgraph Client [Frontend Browser]
+        A[HTML5 Pages] --> B[CSS3 / Tailwind Styling]
+        A --> C[JavaScript & Chart.js]
+    end
+
+    subgraph Server [Backend Node.js API]
+        D[Express.js App] --> E[Auth Middleware & Session Store]
+        D --> F[Transaction Router & Controllers]
+    end
+
+    subgraph Storage [Database Engine]
+        G[(Local MySQL Database)]
+    end
+
+    Client -- HTTP Requests / REST API --> Server
+    Server -- SQL Queries & Connection Pool --> Storage
+```
+
+---
 ## 📂 Repository Structure
 
 ```
