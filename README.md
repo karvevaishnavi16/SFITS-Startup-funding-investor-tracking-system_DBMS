@@ -2,7 +2,11 @@
 
 A full-stack web application designed to track startup fundraising, investor investments, founder equity, cap tables, and dilution history in one place.
 
+<<<<<<< HEAD
 This project was built as a Database Management Systems (DBMS) course project. It shows how relational database design, normalization, transactions, and triggers work in a real-world application.
+=======
+> **Disclaimer:** SFITS is designed to record investments that have already been finalized outside the platform. It acts as a system of record and does not facilitate live monetary transfers, legal negotiations, or fund transfers.
+>>>>>>> cab629c8b103e4e379aaf4e1c97845148ad86188
 
 ---
 
@@ -13,12 +17,31 @@ SFITS solves these problems by providing a clean database system where founders 
 
 ---
 
+<<<<<<< HEAD
 ## 🎯 Project Objectives
 *   Centralize and organize startup funding information.
 *   Automate cap table and equity dilution calculations.
 *   Maintain a clear, historic ledger of who owns what after each round.
 *   Allow founders to manage their team's equity and active funding rounds.
 *   Allow investors to browse startups, log investments, and view their portfolios.
+=======
+## 👥 User Roles
+| Role | Responsibilities |
+| :--- | :--- |
+| **Founder** | Registers a startup, manages co-founders, creates funding rounds, and tracks company equity. |
+| **Investor** | Browses startups, logs investments into funding rounds, and monitors their investment portfolio. |
+
+---
+
+## 🔄 Startup Investment Workflow
+1. **Founder Registration:** Founders sign up and register their startups.
+2. **Founder Setup:** Founders add co-founders and specify initial equity splits.
+3. **Round Creation:** Founders create a new funding round (e.g., Seed or Series A).
+4. **Investor Discovery:** Investors browse available startups and their active funding rounds.
+5. **Investment Entry:** Investors log an investment amount and the equity acquired.
+6. **Automatic Dilution:** The database processes the investment, automatically diluting everyone's equity and logging the changes.
+7. **Cap Table Review:** Both founders and investors view the updated cap table showing new ownership distributions.
+>>>>>>> cab629c8b103e4e379aaf4e1c97845148ad86188
 
 ---
 
@@ -105,6 +128,30 @@ To display your ER diagram here, save your diagram image (e.g., `ER_diagram.png`
 
 ---
 
+
+## ⚙️ System Architecture
+
+```mermaid
+graph TD
+    subgraph Client [Frontend Browser]
+        A[HTML5 Pages] --> B[CSS3 / Tailwind Styling]
+        A --> C[JavaScript & Chart.js]
+    end
+
+    subgraph Server [Backend Node.js API]
+        D[Express.js App] --> E[Auth Middleware & Session Store]
+        D --> F[Transaction Router & Controllers]
+    end
+
+    subgraph Storage [Database Engine]
+        G[(Local MySQL Database)]
+    end
+
+    Client -- HTTP Requests / REST API --> Server
+    Server -- SQL Queries & Connection Pool --> Storage
+```
+
+---
 ## 📂 Repository Structure
 ```
 SFITS_DBMS/
