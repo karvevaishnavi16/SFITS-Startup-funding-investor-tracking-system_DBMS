@@ -1,114 +1,105 @@
 # 🚀 Startup Funding & Investor Tracking System (SFITS)
 
-A full-stack, database-driven web application developed to streamline startup fundraising, investor participation, founder equity management, cap table tracking, and investment monitoring. Designed as part of a Database Management Systems (DBMS) course, this system serves as an automated ledger to track cap table dilution and ownership history across multiple rounds of funding.
+SFITS is a web application that helps founders and investors keep track of startup funding rounds, investments, and equity dilution. Whenever a startup raises money, the database automatically recalculates who owns what percentage of the company so you don't have to do the math manually.
 
-> [!NOTE]
-> **Disclaimer:** SFITS is designed to record investments that have already been finalized outside the platform. It acts as a system of record and does not facilitate live monetary transfers, legal negotiations, or fund transfers.
-
----
-
-## 📖 Table of Contents
-1. [What It Does](#-what-it-does)
-2. [Database Statistics](#-database-statistics)
-3. [System Architecture](#-system-architecture)
-4. [Implemented DBMS Concepts](#-implemented-dbms-concepts)
-5. [Repository Structure](#-repository-structure)
-6. [Tech Stack](#-tech-stack)
-7. [Setup & Installation](#-setup--installation)
-8. [Demo Accounts](#-demo-accounts)
-9. [Future Enhancements](#-future-enhancements)
+This project was built as a Database Management Systems (DBMS) course project to demonstrate database design, normalization, foreign keys, database triggers, and transactions.
 
 ---
 
-## 🚀 What It Does
+## 📌 Problem Statement
 
-SFITS implements a role-based environment catering to the two primary actors of the startup ecosystem:
+In the early stages of a startup, tracking ownership can get messy. When co-founders start a company, they split the equity (e.g., 50/50). However, as they raise new funding rounds (Seed, Series A, etc.) and bring in investors, everyone's ownership gets "diluted" (shrunk). 
 
-### 👥 User Roles & Dashboards
-
-*   **Founder Dashboard:** 
-    *   **Startup Registry:** Register startups, define stages (Pre-Seed to Series C), and manage locations.
-    *   **Founder/Co-Founder Equity:** Assign initial equity stakes to founders (validating that total initial equity does not exceed 100%).
-    *   **Funding Round Manager:** Log funding rounds (Seed, Series A, Series B, etc.) and calculate target valuations.
-    *   **Real-time Cap Table:** Automatically compute and display equity ownership percentages of all founders and investors after dilution.
-    *   **Equity History Ledger:** Track historical logs of ownership changes from the initial stage through all rounds.
-*   **Investor Dashboard:**
-    *   **Directory & Search:** Browse registered startups and analyze their funding status, stages, and focus industries.
-    *   **Investment Logging Portal:** Log investment amounts, acquire equity stakes, and reference deal IDs.
-    *   **Portfolio Tracker:** Track the performance, total capital deployed, and equity owned across multiple startups.
+Tracking these changes across multiple rounds and investors on manual spreadsheets often leads to calculation errors and lost records. SFITS solves this by providing a single database-driven platform where:
+*   Founders can easily manage their startup profiles, add co-founders, and log new funding rounds.
+*   Investors can browse startups, log their investment deals, and monitor their portfolios.
+*   The database automatically computes the diluted equity split and keeps a historic ledger of every change.
 
 ---
 
-## 📊 Database Statistics
+## 🔄 How the Workflow Works
 
-The default production/development database is populated with realistic, fictional seed data tracking:
-*   **8 Users** (with secure bcrypt-hashed credentials)
-*   **12 Industry Classifications** (FinTech, HealthTech, EdTech, E-Commerce, etc.)
-*   **8 Startups** (PayNest, Vestly, Northloop Health, CropSense, Ledgerly, Skillbridge, Quickcart Logistics, Homestead Robotics)
-*   **10 Founders** with structured roles (CEOs, CTOs, Founders)
-*   **6 Investors** (VCs, Angels, Private Equity firm representatives)
-*   **15 Funding Rounds** (from initial baseline rounds to Series C rounds)
-*   **16 Investment Records** (detailing exact amounts deployed and equity acquired)
-*   **51 Equity History Records** (forming a full timeline of capitalization changes)
-
----
-
-## ⚙️ System Architecture
+Here is how data flows through the system:
 
 ```mermaid
-graph TD
-    subgraph Client [Frontend Browser]
-        A[HTML5 Pages] --> B[CSS3 / Tailwind Styling]
-        A --> C[JavaScript & Chart.js]
-    end
+sequenceDiagram
+    autonumber
+    actor Founder
+    actor Investor
+    participant App as Web Frontend / Express Backend
+    participant DB as MySQL Database
 
-    subgraph Server [Backend Node.js API]
-        D[Express.js App] --> E[Auth Middleware & Session Store]
-        D --> F[Transaction Router & Controllers]
-    end
-
-    subgraph Storage [Database Engine]
-        G[(Local MySQL Database)]
-    end
-
-    Client -- HTTP Requests / REST API --> Server
-    Server -- SQL Queries & Connection Pool --> Storage
+    Founder->>App: Register Account & Startup
+    Founder->>App: Add Co-Founders with Initial Equity (Total <= 100%)
+    Founder->>App: Create a Funding Round (e.g., Series A)
+    Investor->>App: Browse Startups & Select Active Round
+    Investor->>App: Log Investment (Amount & Equity Acquired)
+    App->>DB: Start SQL Transaction
+    Note over DB: 1. Logs new investment record.<br/>2. Dilutes existing founders & investors.<br/>3. Records new equity splits in history table.<br/>4. Triggers log changes to audit table.
+    DB-->>App: Commit / Rollback (if error)
+    App-->>Founder: Show updated Cap Table & Charts
+    App-->>Investor: Show updated Portfolio Dashboard
 ```
+
+1.  **Sign Up & Role Selection:** Users register as either a **Founder** or an **Investor**.
+2.  **Startup Creation:** Founders register their startup and add co-founders with their initial equity percentages.
+3.  **Launching a Round:** Founders create a funding round (e.g., Seed, Series A) with target valuations.
+4.  **Logging an Investment:** Investors browse active startups, select a funding round, and log their investment (amount invested and equity percentage acquired).
+5.  **Dilution Math (Automatic):** The backend starts a database transaction. It records the investment, reduces previous shareholders' equity proportionately to make room for the new investor, and saves the new ownership stakes.
+6.  **Real-Time Cap Table:** The updated ownership structure is immediately visible in charts and historical ledgers.
 
 ---
 
-## 🗃 Implemented DBMS Concepts
+## 🗃 Major Database Entities
 
-This project showcases the implementation of core DBMS concepts directly within MySQL:
+These are the main tables in the database schema:
 
-### 1. Relational Database Design & Normalization
-The database schema has been normalized up to **3rd Normal Form (3NF)** to eliminate redundancy and update anomalies:
-*   Transitive dependencies have been removed by splitting industries and startup profiles into separate tables.
-*   Strong referential integrity is established across all tables.
+| Table Name | Description | Key Columns |
+| :--- | :--- | :--- |
+| **`USERS`** | Holds login credentials and roles. | `user_id`, `username`, `email`, `password` (bcrypt-hashed), `role` (`founder`/`investor`) |
+| **`INDUSTRY`** | List of business sectors for startups and investor interests. | `industry_id`, `industry_name` (e.g., FinTech, SaaS) |
+| **`STARTUP`** | Startups created by founders, including their stage and location. | `startup_id`, `startup_name`, `stage`, `founded_year`, `user_id` |
+| **`FOUNDER`** | Details of startup co-founders and their initial equity stakes. | `founder_id`, `founder_name`, `founder_role`, `initial_equity`, `startup_id` |
+| **`INVESTOR`** | Profiles of registered investors and investment firms. | `investor_id`, `investor_name`, `firm_name`, `investor_type` (e.g., VC, Angel) |
+| **`INVESTOR_FOCUS_INDUSTRY`** | Maps which industry sectors an investor is interested in. | `investor_id`, `industry_id` |
+| **`FUNDING_ROUND`** | Funding rounds raised by startups. | `round_id`, `round_type`, `round_date`, `valuation`, `total_amount_raised` |
+| **`INVESTMENT`** | Logs which investor put money into which round. | `investment_id`, `investor_id`, `round_id`, `amount_invested`, `equity_acquired` |
+| **`EQUITY_HISTORY`** | The ledger tracking who owns what percentage after each round. | `ownership_id`, `startup_id`, `round_id`, `founder_id`/`investor_id`, `equity_percentage` |
+| **`EQUITY_HISTORY_AUDIT`** | Audit log tracking changes made to the equity history table. | `audit_id`, `ownership_id`, `old_equity_percentage`, `new_equity_percentage`, `action_type` |
 
-### 2. Constraints & Referential Integrity
-*   **Primary & Foreign Keys:** Enforced on every table to guarantee entity integrity.
-*   **Check Constraints (`CHECK`):**
-    *   `chk_initial_equity` (on `FOUNDER`): Equity must be between `0` and `100`.
-    *   `chk_equity_acquired` (on `INVESTMENT`): Acquired equity must be between `0` and `100`.
-    *   `chk_equity_percentage` (on `EQUITY_HISTORY`): Current stake must be between `0` and `100`.
-    *   `chk_stakeholder_type` (on `EQUITY_HISTORY`): Ensures a record belongs to *either* a founder or an investor, but never both.
-*   **Unique Constraints:**
-    *   `unique_investor_round` (on `INVESTMENT`): Prevents duplicate entries for the same investor participating in the same funding round.
-    *   `email` unique on `USERS` to avoid double registrations.
-    *   `startup_name` unique on `STARTUP` to prevent name collision.
+---
 
-### 3. Advanced SQL & Database Programming
-*   **Database Triggers:**
-    *   `after_equity_insert`: Automatically logs entries into `EQUITY_HISTORY_AUDIT` with an `INSERT` action tag when new ownership rows are recorded.
-    *   `after_equity_update`: Automatically logs updates into `EQUITY_HISTORY_AUDIT` with `UPDATE` action tag, capturing both `old_equity_percentage` and `new_equity_percentage`.
-*   **Transactional Integrity (ACID):**
-    *   Adding an investment triggers an atomic transaction utilizing `db.beginTransaction()`, `db.commit()`, and `db.rollback()`.
-    *   When an investor adds an investment, the backend automatically dilutes existing shareholders' equity (multiplying previous percentages by `(100 - new_equity) / 100`) and inserts the new records into `EQUITY_HISTORY`. If any insert fails, the transaction is rolled back completely to prevent incomplete or corrupt cap tables.
-*   **Indexes:**
-    *   Defined explicitly to optimize lookups on foreign keys (e.g., `idx_founder_startup`, `idx_funding_round_startup`, `idx_equity_history_round`).
-*   **Analytical Queries & Joins:**
-    *   Utilizes advanced analytical functions like window queries (`ROW_NUMBER() OVER (PARTITION BY ... ORDER BY recorded_at DESC)`) in Node.js to fetch the latest equity stakes for dynamic dilution calculations.
+## 📊 Database Statistics (Seed Data)
+
+The system comes pre-seeded with realistic test data containing:
+*   **8 Users** (Passwords are all set to `pass123`)
+*   **12 Industries**
+*   **8 Startups**
+*   **10 Founders**
+*   **6 Investors**
+*   **15 Funding Rounds**
+*   **16 Investment Records**
+*   **51 Equity History Records**
+
+---
+
+## 🛠 Implemented DBMS Concepts
+
+This project showcases the practical application of core database principles:
+
+### 1. Database Normalization
+The database is designed up to **3rd Normal Form (3NF)**. This keeps the tables organized, reduces repeated data, and prevents anomalies (errors when inserting, updating, or deleting records).
+
+### 2. Constraints & Rules
+*   **Check Constraints (`CHECK`):** Ensures equity percentages are valid (greater than 0 and less than or equal to 100). It also prevents a single history row from representing both a founder and an investor at the same time.
+*   **Foreign Keys:** Maintains relationships between tables (e.g., deleting a startup or investor handles cleanups correctly through constraints like `ON DELETE CASCADE`).
+*   **Unique Constraints:** Prevents duplicate entries, like registering the same email twice, or logging the same investor multiple times in the same round.
+
+### 3. Database Triggers
+We use MySQL triggers (`after_equity_insert` and `after_equity_update`) to automatically log any additions or updates on the `EQUITY_HISTORY` table into the `EQUITY_HISTORY_AUDIT` table. This creates a secure, hands-off audit trail.
+
+### 4. Transactions (ACID)
+Adding a new investment requires updating multiple tables. We use SQL transactions (`db.beginTransaction()`, `db.commit()`, and `db.rollback()`) to make sure that if any query fails (e.g., during dilution math updates), all database changes are rolled back. This keeps your cap table math clean and correct.
 
 ---
 
@@ -118,33 +109,33 @@ The database schema has been normalized up to **3rd Normal Form (3NF)** to elimi
 SFITS_DBMS/
 ├── Backend/
 │   ├── scripts/
-│   │   └── tmp_debug_equity.js  # Utility script for verifying dilution maths
-│   ├── .env.example             # Template for local environment variables
-│   └── server.js                # Express REST API, auth middleware, and DB router
+│   │   └── tmp_debug_equity.js  # Script to test and debug dilution calculations
+│   ├── .env.example             # Template for database configuration environment variables
+│   └── server.js                # Express server handling REST API routes and SQL queries
 ├── Database/
-│   ├── schema.sql               # Database schema: tables, constraints, indexes & triggers
-│   └── seed.sql                 # Fictional seed data (users, startups, deals, history)
+│   ├── schema.sql               # Database structure (Tables, constraints, triggers)
+│   └── seed.sql                 # Fictional seed data
 ├── Frontend/
-│   ├── pages/                   # Founder-specific management pages
-│   │   ├── captable.html        # Dynamic Cap Table rendering (Chart.js)
-│   │   ├── founders.html        # Manage founders and initial equity splits
-│   │   ├── funding.html         # Launch/log funding rounds
-│   │   ├── history.html         # View full historic audit ledger
-│   │   ├── investors.html       # View list of registered investors
-│   │   └── startups.html        # Register and manage startups
-│   ├── investor_pages/          # Investor-specific dashboard pages
-│   │   ├── browse_startups.html # Browse startup directory with search/filters
-│   │   ├── invest.html          # Log investments into active rounds
-│   │   └── my_investments.html  # Track total portfolio value and equity holdings
-│   ├── dashboard.html           # Core dashboard wrapper
-│   ├── founder_dashboard.html   # Founder landing interface
-│   ├── investor_dashboard.html  # Investor landing interface
-│   ├── login.html               # User authentication entry
-│   ├── signup.html              # Account creation
-│   ├── styles.css               # Clean styling sheet
-│   ├── theme.js                 # Theme controller (dark/light mode toggle)
-│   └── welcome.html             # Landing homepage
-├── package.json                 # Project dependencies and concurrent execution scripts
+│   ├── pages/                   # Founder interfaces (startups, co-founders, funding rounds)
+│   │   ├── captable.html        # Real-time cap table visualization
+│   │   ├── founders.html        # Add co-founders
+│   │   ├── funding.html         # Start a funding round
+│   │   ├── history.html         # View historic equity logs
+│   │   ├── investors.html       # View list of investors
+│   │   └── startups.html        # Create and manage startups
+│   ├── investor_pages/          # Investor interfaces
+│   │   ├── browse_startups.html # Search registered startups
+│   │   ├── invest.html          # Log an investment
+│   │   └── my_investments.html  # Track total portfolio value and holdings
+│   ├── dashboard.html           # Simple dashboard landing portal
+│   ├── founder_dashboard.html   # Main dashboard for founders
+│   ├── investor_dashboard.html  # Main dashboard for investors
+│   ├── login.html               # Authentication page
+│   ├── signup.html              # Registration page
+│   ├── styles.css               # Styling sheet
+│   ├── theme.js                 # Theme controller (Dark / Light mode toggle)
+│   └── welcome.html             # Homepage
+├── package.json                 # Node.js project packages and run scripts
 ├── package-lock.json
 └── .gitignore
 ```
@@ -153,17 +144,16 @@ SFITS_DBMS/
 
 ## 🛠 Tech Stack
 
-*   **Frontend:** HTML5, CSS3, Vanilla JavaScript, Chart.js (for visualization), Tailwind CSS (via local classes).
-*   **Backend:** Node.js, Express.js (REST API framework).
-*   **Database:** MySQL (Relational database engine).
-*   **Security:** `bcrypt` (Secure cryptographic password hashing), `crypto` (Session tokens), `cors`, `dotenv`.
-*   **Development Tools:** `concurrently` (runs server and client simultaneously), `nodemon` (hot reloading server), `live-server` (local development server for frontend assets).
+*   **Frontend:** HTML5, CSS3, Vanilla JavaScript, Chart.js (for rendering cap table charts).
+*   **Backend:** Node.js, Express.js.
+*   **Database:** MySQL.
+*   **Security:** `bcrypt` (password hashing), `crypto` (session token generation), `cors`, `dotenv`.
 
 ---
 
 ## ⚙️ Setup & Installation
 
-Follow these steps to run the development environment locally:
+Here is how you can run the project locally on your machine:
 
 ### 1. Clone the Repository
 ```bash
@@ -171,34 +161,34 @@ git clone https://github.com/karvevaishnavi16/SFITS_DBMS.git
 cd SFITS_DBMS
 ```
 
-### 2. Install Project Dependencies
-Install backend and development packages from the root directory:
+### 2. Install Dependencies
+Run this in the root directory to install required packages:
 ```bash
 npm install
 ```
 
-### 3. Initialize the Database
+### 3. Setup Your Database
 1.  Make sure you have a local **MySQL Server** installed and running.
-2.  Open your MySQL client (CLI, Workbench, etc.) and create a database named `SFITS_DBMS_PRJ`:
+2.  Open your MySQL terminal or Workbench and create the database:
     ```sql
     CREATE DATABASE SFITS_DBMS_PRJ;
     ```
-3.  Import the database schema:
+3.  Run the schema setup:
     ```bash
     mysql -u your_username -p SFITS_DBMS_PRJ < Database/schema.sql
     ```
-4.  Seed the database with test data:
+4.  Load the seed data:
     ```bash
     mysql -u your_username -p SFITS_DBMS_PRJ < Database/seed.sql
     ```
 
 ### 4. Configure Environment Variables
-1.  Navigate to the `Backend/` folder.
-2.  Copy `.env.example` to create a `.env` file:
+1.  Go into the `Backend/` directory.
+2.  Duplicate `.env.example` and name the new file `.env`:
     ```bash
     cp .env.example .env
     ```
-3.  Edit the `.env` file with your database credentials:
+3.  Open `.env` and fill in your database credentials:
     ```env
     DB_HOST=localhost
     DB_USER=your_mysql_username
@@ -206,21 +196,21 @@ npm install
     DB_NAME=SFITS_DBMS_PRJ
     ```
 
-### 5. Launch the Development Environment
-From the root directory, run:
+### 5. Run the Application
+Go back to the root directory and run:
 ```bash
 npm run dev
 ```
-*   This command executes `concurrently` to start the backend Node API server (on port `5000` via `nodemon`) and serves the frontend assets (on port `3000` via `live-server`).
-*   Your browser will automatically launch and open the Welcome homepage at `http://localhost:3000`.
+*   This uses `concurrently` to start the backend server (on port `5000`) and the frontend web server (on port `3000`) at the same time.
+*   Your default browser will automatically open to `http://localhost:3000`.
 
 ---
 
 ## 👥 Demo Accounts
 
-You can log in and explore the app's features using any of the fictional users created in `seed.sql`. All seed accounts share the same default password:
+You can test the system using these pre-seeded accounts. All accounts use the password **`pass123`**:
 
-| Role | Username | Email | Password |
+| Role | Name | Email | Password |
 | :--- | :--- | :--- | :--- |
 | **Founder** | Aarav Sharma | `aarav@paynest.com` | `pass123` |
 | **Founder** | Kunal Verma | `kunal@vestly.com` | `pass123` |
@@ -234,9 +224,7 @@ You can log in and explore the app's features using any of the fictional users c
 
 ## 🔮 Future Enhancements
 
-*   **Secured Session Management:** Replace basic memory token caching with JWT (JSON Web Tokens) or Redis session store.
-*   **Enhanced Cryptography:** Integrate verification tokens and email confirmations for new sign-ups.
-*   **Pro-rata Rights Calculator:** Give investors automated calculations on how much capital they need to commit to maintain their equity stake in subsequent rounds.
-*   **Milestone-based Funding Disbursal:** Add smart triggers that track target funding releases based on startup accomplishments.
-*   **Data Export Tools:** PDF/CSV exporters for Cap Tables and audit trails.
-*   **Real-time Notifications:** In-app warnings when equity changes occur.
+*   **JWT Authentication:** Replace the basic session cache with JSON Web Tokens (JWT) for secure authentication.
+*   **Pro-rata Calculations:** Let investors calculate the amount they need to invest in future rounds to keep their exact ownership percentage.
+*   **Milestone Logging:** Track target funding releases based on startup roadmap checkpoints.
+*   **Data Exporters:** Export cap tables and history tables as PDF or CSV files.
