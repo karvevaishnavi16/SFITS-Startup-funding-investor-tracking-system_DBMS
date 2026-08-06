@@ -104,7 +104,8 @@ We use MySQL triggers (`after_equity_insert` and `after_equity_update`) to autom
 Adding a new investment requires updating multiple tables. We use SQL transactions (`db.beginTransaction()`, `db.commit()`, and `db.rollback()`) to make sure that if any query fails (e.g., during dilution math updates), all database changes are rolled back. This keeps your cap table math clean and correct.
 
 ---
-
+## ER Diagram 
+<img width="1611" height="1051" alt="image" src="https://github.com/user-attachments/assets/dd9a1d8b-46ab-4b7a-b282-9797023a1e8f" />
 
 ## ⚙️ System Architecture
 
