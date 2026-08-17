@@ -1,16 +1,16 @@
 {
   "name": "sfits",
-  "version": "1.0.0",
-  "description": "# A web application to track startup funding rounds, investor ownership and equity dilution over time.",
+  "version": "2.0.0",
+  "description": "Startup funding, investor tracking and cap-table management platform.",
   "main": "Backend/server.js",
   "scripts": {
     "start": "node Backend/server.js",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "nodemon Backend/server.js",
     "client": "live-server Frontend --port=3000 --entry-file=welcome.html",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test Backend/tests/*.test.js"
   },
-  "keywords": [],
+  "keywords": ["startup", "funding", "cap-table", "mysql", "express", "dbms"],
   "author": "",
   "license": "ISC",
   "dependencies": {
