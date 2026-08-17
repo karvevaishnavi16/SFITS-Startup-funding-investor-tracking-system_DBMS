@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS INVESTMENT (
     round_id INT NOT NULL,
     amount_invested BIGINT UNSIGNED NOT NULL,
     equity_acquired DECIMAL(5, 2) NOT NULL,
+    investment_date DATE NOT NULL,
     deal_reference VARCHAR(255) NULL,
     CONSTRAINT chk_equity_acquired CHECK (
         equity_acquired > 0
@@ -157,8 +158,6 @@ CREATE TABLE IF NOT EXISTS EQUITY_HISTORY (
     INDEX idx_equity_history_founder (founder_id),
     INDEX idx_equity_history_investor (investor_id)
 );
-
-SHOW TABLES;
 
 -- Table 9: EQUITY_HISTORY_AUDIT (Audit Log)
 CREATE TABLE IF NOT EXISTS EQUITY_HISTORY_AUDIT (
