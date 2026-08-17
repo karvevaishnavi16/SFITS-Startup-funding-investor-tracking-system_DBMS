@@ -1,6 +1,6 @@
 {
   "name": "sfits",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "description": "Startup funding, investor tracking and cap-table management platform.",
   "main": "Backend/server.js",
   "scripts": {
@@ -8,7 +8,7 @@
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "nodemon Backend/server.js",
     "client": "live-server Frontend --port=3000 --entry-file=welcome.html",
-    "test": "node --test Backend/tests/*.test.js"
+    "test": "node --test Backend/tests"
   },
   "keywords": ["startup", "funding", "cap-table", "mysql", "express", "dbms"],
   "author": "",
