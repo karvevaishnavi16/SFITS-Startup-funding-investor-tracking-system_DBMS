@@ -1,7 +1,7 @@
 USE SFITS_DBMS_PRJ;
 
--- Safe migration for databases created from an older SFITS schema.
--- Run this once before starting the hardened backend.
+-- Run this once for an existing SFITS database created from the older schema.
+-- A fresh database should use Database/schema.sql directly.
 
 ALTER TABLE FUNDING_ROUND
     ADD COLUMN IF NOT EXISTS target_funding BIGINT UNSIGNED NOT NULL DEFAULT 0,
@@ -33,11 +33,5 @@ CREATE TABLE IF NOT EXISTS AUTH_SESSION (
     INDEX idx_auth_session_expiry (expires_at)
 );
 
-CREATE INDEX idx_funding_round_date
-    ON FUNDING_ROUND (startup_id, round_date);
-
-CREATE INDEX idx_equity_history_snapshot
-    ON EQUITY_HISTORY (startup_id, recorded_at);
-
-CREATE INDEX idx_equity_audit_startup
-    ON EQUITY_HISTORY_AUDIT (startup_id, changed_at);
+-- New indexes are included in schema.sql for fresh installs.
+-- Existing databases can add them manually if EXPLAIN shows a need.
