@@ -1,1267 +1,809 @@
-// ================= IMPORTS =================
 require("dotenv").config();
+
 const express = require("express");
-const mysql = require("mysql2");
+const mysql = require("mysql2/promise");
 const cors = require("cors");
 const bcrypt = require("bcrypt");
 const crypto = require("crypto");
 
+const { applyInvestmentDilution } = require("./services/capTable");
+
 const app = express();
-app.use(cors());
-app.use(express.json());
+const PORT = Number(process.env.PORT || 5000);
+const SESSION_DAYS = Number(process.env.SESSION_DAYS || 7);
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:3000";
 
-// ================= AUTH MIDDLEWARE =================
-const sessions = new Map();
+app.disable("x-powered-by");
+app.use(cors({ origin: FRONTEND_ORIGIN, methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], allowedHeaders: ["Content-Type", "Authorization"] }));
+app.use(express.json({ limit: "100kb" }));
 
-function requireAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  const token = authHeader.split(" ")[1];
-  const user = sessions.get(token);
-  if (!user) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  req.user = user;
-  next();
-}
-
-// ================= DB =================
-const db = mysql.createConnection({
+const pool = mysql.createPool({
   host: process.env.DB_HOST || "localhost",
   user: process.env.DB_USER || "root",
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME || "SFITS_DBMS_PRJ",
+  waitForConnections: true,
+  connectionLimit: Number(process.env.DB_POOL_SIZE || 10),
+  queueLimit: 0,
+  dateStrings: true,
 });
 
-db.connect((err) => {
-  if (err) return console.error(err);
-  console.log("MySQL Connected");
-
-  function ensureColumn(tableName, columnName, alterSql) {
-    db.query(
-      `SHOW COLUMNS FROM ${tableName} LIKE ?`,
-      [columnName],
-      (showErr, showRes) => {
-        if (showErr) {
-          return console.warn(
-            `Unable to inspect ${tableName} columns:`,
-            showErr.sqlMessage || showErr.message,
-          );
-        }
-
-        if (!showRes || showRes.length === 0) {
-          db.query(alterSql, (alterErr) => {
-            if (alterErr) {
-              return console.error(
-                `Failed to add ${tableName}.${columnName}:`,
-                alterErr.sqlMessage || alterErr.message,
-              );
-            }
-            console.log(`Added missing ${tableName}.${columnName} column`);
-          });
-        }
-      },
-    );
-  }
-
-  ensureColumn(
-    "FOUNDER",
-    "founder_email",
-    "ALTER TABLE FOUNDER ADD COLUMN founder_email VARCHAR(100) NULL",
-  );
-
-  ensureColumn(
-    "FOUNDER",
-    "user_id",
-    "ALTER TABLE FOUNDER ADD COLUMN user_id INT NULL",
-  );
-
-  ensureColumn(
-    "INVESTOR",
-    "user_id",
-    "ALTER TABLE INVESTOR ADD COLUMN user_id INT NULL",
-  );
-
-  ensureColumn(
-    "STARTUP",
-    "user_id",
-    "ALTER TABLE STARTUP ADD COLUMN user_id INT NULL",
-  );
-
-  ensureColumn(
-    "INVESTOR",
-    "is_visible",
-    "ALTER TABLE INVESTOR ADD COLUMN is_visible TINYINT(1) DEFAULT 1",
-  );
-
-  // Γ£à ONE-TIME FIX: Make sure all existing investors are visible
-  db.query("UPDATE INVESTOR SET is_visible = 1 WHERE is_visible IS NULL OR is_visible = 0");
-
-  // Seed INDUSTRY table if empty///////////////////////
-  db.query("SELECT COUNT(*) AS cnt FROM INDUSTRY", (err, res) => {
-    if (err)
-      return console.warn("Could not check INDUSTRY table:", err.message);
-    if (res[0].cnt === 0) {
-      db.query(
-        `INSERT IGNORE INTO INDUSTRY (industry_id, industry_name) VALUES
-         ('I001','FinTech'),('I002','HealthTech'),('I003','EdTech')`,
-        (insertErr) => {
-          if (insertErr)
-            return console.error("Industry seed failed:", insertErr.message);
-          console.log("Seeded INDUSTRY table");
-        },
-      );
-    }
-  });
-});
-////////////////////////////
-
-function isValidEmail(email) {
-  return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+function hashToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-// ================= HELPER =================
+function createToken() {
+  return crypto.randomBytes(48).toString("base64url");
+}
 
-// ================= AUTH =================
-app.post("/signup", (req, res) => {
-  const { username, email, password, role } = req.body;
+function validEmail(email) {
+  return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+}
 
-  if (!isValidEmail(email)) {
-    return res.status(400).send("Invalid email address.");
-  }
+function validPositiveNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0;
+}
 
-  const saltRounds = 10;
-  bcrypt.hash(password, saltRounds, (err, hash) => {
-    if (err) return res.status(500).send("Error hashing password.");
+function validDate(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+}
 
-    db.query(
-      "INSERT INTO USERS (username, email, password, role) VALUES (?, ?, ?, ?)",
-      [username, email, hash, role],
-      (err) => {
-        if (err) return res.status(500).send(err.sqlMessage);
-        res.send("Signup successful");
-      }
+function publicError(res, status, message) {
+  return res.status(status).json({ error: message });
+}
+
+function handleDbError(res, error) {
+  console.error(error);
+  if (error && error.code === "ER_DUP_ENTRY") return publicError(res, 409, "A record with the same unique value already exists.");
+  if (error && error.code === "ER_NO_REFERENCED_ROW_2") return publicError(res, 400, "A referenced record does not exist.");
+  return publicError(res, 500, "Internal server error.");
+}
+
+async function requireAuth(req, res, next) {
+  try {
+    const header = req.headers.authorization || "";
+    if (!header.startsWith("Bearer ")) return publicError(res, 401, "Authentication required.");
+
+    const token = header.slice(7).trim();
+    if (!token) return publicError(res, 401, "Authentication required.");
+
+    const [rows] = await pool.execute(
+      `SELECT u.user_id, u.username, u.email, u.role, i.investor_id
+       FROM AUTH_SESSION s
+       JOIN USERS u ON u.user_id = s.user_id
+       LEFT JOIN INVESTOR i ON i.user_id = u.user_id
+       WHERE s.token_hash = ? AND s.expires_at > NOW()`,
+      [hashToken(token)],
     );
-  });
-});
 
-app.post("/login", (req, res) => {
-  const { email, password } = req.body;
-
-  if (!isValidEmail(email)) {
-    return res.status(400).send("Invalid email address.");
+    if (rows.length === 0) return publicError(res, 401, "Session expired or invalid.");
+    req.user = rows[0];
+    next();
+  } catch (error) {
+    handleDbError(res, error);
   }
+}
 
-  db.query(
-    `SELECT u.*, i.investor_id
-     FROM USERS u
-     LEFT JOIN INVESTOR i ON u.user_id = i.user_id
-     WHERE u.email = ?`,
-    [email],
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage || "Login failed");
+function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) return publicError(res, 403, "You do not have permission for this action.");
+    next();
+  };
+}
 
-      if (result.length === 0) return res.status(401).send("Invalid email or password");
-
-      const user = result[0];
-
-      bcrypt.compare(password, user.password, (err, isMatch) => {
-        if (err) return res.status(500).send("Error comparing passwords");
-        
-        if (!isMatch) {
-          return res.status(401).send("Invalid email or password");
-        }
-
-      if (user.email) {
-        db.query(
-          "UPDATE FOUNDER SET user_id = ? WHERE TRIM(LOWER(founder_email)) = TRIM(LOWER(?)) AND user_id IS NULL",
-          [user.user_id, user.email],
-          (updateErr) => {
-            if (updateErr)
-              console.warn("Founder auto-link failed:", updateErr.sqlMessage);
-          },
-        );
-      }
-
-      const sendLogin = (investorId) => {
-        const token = crypto.randomBytes(32).toString('hex');
-        sessions.set(token, { user_id: user.user_id, role: user.role });
-        
-        res.json({
-          user_id: user.user_id,
-          username: user.username,
-          role: user.role,
-          investor_id: investorId || null,
-          token: token
-        });
-      };
-
-      if (user.role === "investor" && !user.investor_id) {
-        db.query(
-          "UPDATE INVESTOR SET user_id = ? WHERE TRIM(LOWER(investor_name)) = TRIM(LOWER(?)) AND user_id IS NULL",
-          [user.user_id, user.username],
-          (linkErr) => {
-            if (linkErr) {
-              console.warn("Investor auto-link failed:", linkErr.sqlMessage);
-              return sendLogin(null);
-            }
-
-            db.query(
-              "SELECT investor_id FROM INVESTOR WHERE user_id = ? LIMIT 1",
-              [user.user_id],
-              (invErr, invRes) => {
-                if (invErr) {
-                  console.warn(
-                    "Investor fetch after auto-link failed:",
-                    invErr.sqlMessage,
-                  );
-                  return sendLogin(null);
-                }
-
-                sendLogin(invRes[0]?.investor_id || null);
-              },
-            );
-          },
-        );
-        return;
-      }
-
-      sendLogin(user.investor_id);
-      });
-    },
-  );
-});
-
-// ================= STARTUPS =================
-app.post("/addStartup", requireAuth, (req, res) => {
-  const {
-    startup_name,
-    founded_year,
-    stage,
-    industry_id,
-    city,
-    state,
-    country,
-    user_id,
-  } = req.body;
-
-  db.query(
-    `INSERT INTO STARTUP (startup_name, founded_year, stage, city, state, country, industry_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      startup_name,
-      founded_year,
-      stage,
-      city,
-      state,
-      country,
-      industry_id,
-      user_id,
-    ],
-    (err) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.send("Startup added");
-    },
-  );
-});
-
-// Γ£à RESTORED
-app.get("/startups/:user_id", (req, res) => {
-  db.query(
-    `SELECT DISTINCT s.*
+async function ownsStartup(userId, startupId) {
+  const [rows] = await pool.execute(
+    `SELECT s.startup_id
      FROM STARTUP s
-     LEFT JOIN FOUNDER f ON s.startup_id = f.startup_id
-     LEFT JOIN USERS u2 ON TRIM(LOWER(u2.email)) = TRIM(LOWER(f.founder_email))
-     WHERE s.user_id = ? OR f.user_id = ? OR u2.user_id = ?`,
-    [req.params.user_id, req.params.user_id, req.params.user_id],
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.json(result);
-    },
+     WHERE s.startup_id = ?
+       AND (s.user_id = ? OR EXISTS (
+         SELECT 1 FROM FOUNDER f WHERE f.startup_id = s.startup_id AND f.user_id = ?
+       ))
+     LIMIT 1`,
+    [startupId, userId, userId],
   );
-});
+  return rows.length > 0;
+}
 
-// ================= FOUNDERS =================
-app.post("/addFounder", requireAuth, (req, res) => {
-  const { founders, startup_id } = req.body;
+async function getInvestorForUser(userId) {
+  const [rows] = await pool.execute("SELECT * FROM INVESTOR WHERE user_id = ? LIMIT 1", [userId]);
+  return rows[0] || null;
+}
 
-  if (!Array.isArray(founders) || founders.length === 0) {
-    return res.status(400).send("No founders provided");
-  }
-
-  let totalNewEquity = 0;
-
-  for (const founder of founders) {
-    const equity = Number(founder.equity);
-    if (Number.isNaN(equity) || equity <= 0) {
-      return res.status(400).send("Founder equity must be a positive number");
-    }
-
-    totalNewEquity += equity;
-  }
-
-  if (totalNewEquity > 100) {
-    return res
-      .status(400)
-      .send("Total equity for new founders cannot exceed 100%");
-  }
-
-  db.query(
-    "SELECT COALESCE(SUM(initial_equity), 0) AS existing_total FROM FOUNDER WHERE startup_id=?",
-    [startup_id],
-    (err, existingRes) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-
-      const existingTotal = existingRes[0]?.existing_total || 0;
-      if (existingTotal + totalNewEquity > 100) {
-        return res.status(400).send("Total founder equity cannot exceed 100%");
-      }
-
-      db.query("SELECT NOW() as now", (err, timeRes) => {
-        if (err) return res.status(500).send(err.sqlMessage);
-
-        const snapshotTime = timeRes[0].now;
-
-        // ≡ƒöÑ STEP 1: GET OR CREATE ROUND (ONLY ONCE)
-        db.query(
-          "SELECT round_id FROM FUNDING_ROUND WHERE startup_id=? ORDER BY round_date DESC LIMIT 1",
-          [startup_id],
-          (err, roundRes) => {
-            if (err) return res.status(500).send(err.sqlMessage);
-
-            let round_id;
-
-            if (roundRes.length === 0) {
-              db.query(
-                `INSERT INTO FUNDING_ROUND 
-             (round_type, round_date, valuation, total_amount_raised, startup_id)
-             VALUES ('Initial', CURDATE(), 0, 0, ?)`,
-                [startup_id],
-                (err2, insertRes) => {
-                  if (err2) return res.status(500).send(err2.sqlMessage);
-
-                  let round_id = insertRes.insertId;
-                  insertAllFounders(round_id);
-                },
-              );
-            } else {
-              round_id = roundRes[0].round_id;
-              insertAllFounders(round_id);
-            }
-
-            // ≡ƒöÑ STEP 2: INSERT FOUNDERS + EQUITY
-            function insertAllFounders(round_id) {
-              let completed = 0;
-
-              founders.forEach((f) => {
-                // Link the founder to an existing user account by email so the co-founder
-                // can see the startup when they log in.
-                db.query(
-                  "SELECT user_id FROM USERS WHERE TRIM(LOWER(email)) = TRIM(LOWER(?))",
-                  [f.email],
-                  (err1, userRes) => {
-                    if (err1) return res.status(500).send(err1.sqlMessage);
-
-                    const founderUserId =
-                      userRes.length > 0 ? userRes[0].user_id : null;
-                    const founderEmail = f.email || null;
-
-                    db.query(
-                      `INSERT INTO FOUNDER 
-                   (founder_name, founder_email, founder_role, initial_equity, startup_id, user_id)
-                   VALUES (?, ?, ?, ?, ?, ?)`,
-                      [
-                        f.name,
-                        founderEmail,
-                        f.role,
-                        f.equity,
-                        startup_id,
-                        founderUserId,
-                      ],
-                      (err2, founderRes) => {
-                        if (err2) return res.status(500).send(err2.sqlMessage);
-                        const founder_id = founderRes.insertId;
-
-                        // ✅ insert into EQUITY_HISTORY
-                        db.query(
-                          `INSERT INTO EQUITY_HISTORY
-                       (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at)
-                       VALUES (?, ?, ?, NULL, ?, ?)`,
-                          [
-                            startup_id,
-                            round_id, // ✅ dynamic
-                            founder_id,
-                            f.equity,
-                            snapshotTime,
-                          ],
-                          (err3) => {
-                            if (err3)
-                              return res.status(500).send(err3.sqlMessage);
-
-                            completed++;
-
-                            if (completed === founders.length) {
-                              res.send("All founders added");
-                            }
-                          },
-                        );
-                      },
-                    );
-                  },
-                );
-              });
-            }
-          },
-        );
-      });
-    },
+async function latestSnapshot(connection, startupId) {
+  const [rows] = await connection.execute(
+    `SELECT eh.founder_id, eh.investor_id, eh.equity_percentage,
+            f.founder_name, i.investor_name
+     FROM EQUITY_HISTORY eh
+     LEFT JOIN FOUNDER f ON f.founder_id = eh.founder_id
+     LEFT JOIN INVESTOR i ON i.investor_id = eh.investor_id
+     WHERE eh.startup_id = ?
+       AND eh.recorded_at = (
+         SELECT MAX(recorded_at) FROM EQUITY_HISTORY WHERE startup_id = ?
+       )
+     ORDER BY eh.ownership_id`,
+    [startupId, startupId],
   );
-});
+  return rows;
+}
 
-// Γ£à RESTORED
-app.get("/founders/:user_id", (req, res) => {
-  const uid = req.params.user_id;
-  db.query(
-    `SELECT DISTINCT f.*, s.startup_name, COALESCE(u.email, f.founder_email) AS founder_email
-     FROM FOUNDER f
-     JOIN STARTUP s ON f.startup_id = s.startup_id
-     LEFT JOIN USERS u ON f.user_id = u.user_id
-     LEFT JOIN USERS u2 ON TRIM(LOWER(u2.email)) = TRIM(LOWER(f.founder_email))
-     WHERE s.user_id = ?
-       OR f.user_id = ?
-       OR u2.user_id = ?
-       OR f.startup_id IN (
-            SELECT f2.startup_id FROM FOUNDER f2
-            LEFT JOIN USERS u3 ON TRIM(LOWER(u3.email)) = TRIM(LOWER(f2.founder_email))
-            WHERE f2.user_id = ? OR u3.user_id = ?
-          )`,
-    [uid, uid, uid, uid, uid],
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.json(result);
-    },
-  );
-});
+async function writeSnapshot(connection, startupId, roundId, holders, recordedAt) {
+  const total = holders.reduce((sum, holder) => sum + Number(holder.equity_percentage), 0);
+  if (Math.abs(total - 100) > 0.01) throw new Error("CAP_TABLE_TOTAL_INVALID");
 
-// ================= FUNDING =================
-app.post("/addFunding", requireAuth, (req, res) => {
-  const { startup_id, round_type, round_date, valuation, total_amount_raised } =
-    req.body;
-
-  // Get all existing funding rounds for this startup
-  db.query(
-    `SELECT round_type, round_date FROM FUNDING_ROUND WHERE startup_id = ? ORDER BY round_date ASC`,
-    [startup_id],
-    (err, existingRounds) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-
-      const newDate = new Date(round_date);
-      const roundOrder = [
-        "Pre-Seed",
-        "Seed",
-        "Series A",
-        "Series B",
-        "Series C",
-      ];
-      const newRoundIndex = roundOrder.indexOf(round_type);
-
-      // Validate date constraints
-      if (existingRounds.length > 0) {
-        // Find the latest existing round date
-        const latestExistingDate = new Date(
-          Math.max(...existingRounds.map((r) => new Date(r.round_date))),
-        );
-
-        // New round must be on or after the latest existing round
-        if (newDate < latestExistingDate) {
-          return res
-            .status(400)
-            .send(
-              `New round date must be on or after the latest existing round (${latestExistingDate.toISOString().split("T")[0]})`,
-            );
-        }
-
-        // If adding an earlier stage round, check against later stage rounds
-        const laterRounds = existingRounds.filter(
-          (r) => roundOrder.indexOf(r.round_type) > newRoundIndex,
-        );
-
-        if (laterRounds.length > 0) {
-          const earliestLaterRoundDate = new Date(
-            Math.min(...laterRounds.map((r) => new Date(r.round_date))),
-          );
-
-          if (newDate > earliestLaterRoundDate) {
-            return res
-              .status(400)
-              .send(
-                `${round_type} round (earlier stage) must be on or before the earliest later round (${earliestLaterRoundDate.toISOString().split("T")[0]})`,
-              );
-          }
-        }
-      }
-
-      db.query(
-        `INSERT INTO FUNDING_ROUND (round_type, round_date, valuation, total_amount_raised, startup_id) VALUES (?, ?, ?, ?, ?)`,
-        [
-          round_type,
-          new Date(round_date).toISOString().slice(0, 10),
-          valuation,
-          total_amount_raised,
-          startup_id,
-        ],
-        (err) => {
-          if (err) return res.status(500).send(err.sqlMessage);
-          res.send("Funding added");
-        },
-      );
-    },
-  );
-});
-
-app.get("/fundingRounds/:startup_id", (req, res) => {
-  db.query(
-    `SELECT round_type, round_date FROM FUNDING_ROUND WHERE startup_id = ? ORDER BY round_date ASC`,
-    [req.params.startup_id],
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.json(result);
-    },
-  );
-});
-
-// Γ£à RESTORED
-app.get("/funding/:user_id", (req, res) => {
-  const uid = req.params.user_id;
-  db.query(
-    `SELECT DISTINCT fr.*, s.startup_name
-     FROM FUNDING_ROUND fr
-     JOIN STARTUP s ON fr.startup_id = s.startup_id
-     LEFT JOIN FOUNDER f ON s.startup_id = f.startup_id
-     LEFT JOIN USERS u2 ON TRIM(LOWER(u2.email)) = TRIM(LOWER(f.founder_email))
-     WHERE s.user_id = ? OR f.user_id = ? OR u2.user_id = ?`,
-    [uid, uid, uid],
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.json(result);
-    },
-  );
-});
-
-app.get("/investors", (req, res) => {
-  db.query(
-    `SELECT investor_id, investor_name, firm_name, investor_type, country
-     FROM INVESTOR
-     WHERE is_visible = 1
-     ORDER BY investor_name`,
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.json(result);
-    },
-  );
-});
-
-app.post("/addInvestor", requireAuth, (req, res) => {
-  const { name, firm, type, country } = req.body;
-
-  db.query(
-    `INSERT INTO INVESTOR
-     (investor_name, firm_name, investor_type, country)
-     VALUES (?, ?, ?, ?)`,
-    [name, firm, type, country],
-    (err) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.send("Investor added");
-    },
-  );
-});
-
-app.put("/updateInvestor", requireAuth, (req, res) => {
-  const { id, name, firm, type, country } = req.body;
-
-  db.query(
-    `UPDATE INVESTOR
-     SET investor_name = ?, firm_name = ?, investor_type = ?, country = ?
-     WHERE investor_id = ?`,
-    [name, firm, type, country, id],
-    (err) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.send("Investor updated");
-    },
-  );
-});
-
-app.delete("/deleteInvestor/:id", requireAuth, (req, res) => {
-  const { id } = req.params;
-
-  // Hide the investor instead of deleting (soft delete)
-  db.query(
-    `UPDATE INVESTOR SET is_visible = 0 WHERE investor_id = ?`,
-    [id],
-    (err) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.send("Investor hidden successfully");
-    },
-  );
-});
-
-app.get("/investments/:user_id", (req, res) => {
-  db.query(
-    `SELECT DISTINCT
-      inv.investor_name,
-      fr.round_type,
-      i.amount_invested,
-      i.equity_acquired
-     FROM INVESTMENT i
-     JOIN INVESTOR inv ON i.investor_id = inv.investor_id
-     JOIN FUNDING_ROUND fr ON i.round_id = fr.round_id
-     JOIN STARTUP s ON fr.startup_id = s.startup_id
-     LEFT JOIN FOUNDER f ON s.startup_id = f.startup_id
-     LEFT JOIN USERS u2 ON TRIM(LOWER(u2.email)) = TRIM(LOWER(f.founder_email))
-     WHERE s.user_id = ? OR f.user_id = ? OR u2.user_id = ?`,
-    [req.params.user_id, req.params.user_id, req.params.user_id],
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.json(result);
-    },
-  );
-});
-
-// ================= INVESTMENT =================
-app.post("/addInvestment", requireAuth, (req, res) => {
-  const {
-    round_id,
-    user_id,
-    investor_id: providedInvestorId,
-    username,
-    firm_name,
-    country,
-    amount,
-    equity,
-    deal_reference
-  } = req.body;
-
-  const equityNum = Number(equity);
-  console.log("Incoming Investment:", req.body);
-
-  db.beginTransaction((err) => {
-    if (err) return res.status(500).send(err.sqlMessage);
-
-    const rollbackAndSend = (error) => {
-      db.rollback(() => {
-        res.status(500).send(error.sqlMessage || error.message || error);
-      });
-    };
-
-    db.query(
-      "SELECT investor_id FROM INVESTOR WHERE user_id=? OR investor_id=?",
-      [user_id, providedInvestorId || null],
-      (err, invRes) => {
-        if (err) return rollbackAndSend(err);
-
-        let getInvestorPromise;
-        if (invRes.length === 0) {
-          getInvestorPromise = new Promise((resolve, reject) => {
-            db.query(
-              `INSERT INTO INVESTOR (investor_name, firm_name, country, user_id) VALUES (?, ?, ?, ?)`,
-              [username || "Investor", firm_name || "Individual", country || "India", user_id],
-              (err2, result) => {
-                if (err2) reject(err2);
-                else resolve(result.insertId);
-              }
-            );
-          });
-        } else {
-          getInvestorPromise = Promise.resolve(invRes[0].investor_id);
-        }
-
-        getInvestorPromise
-          .then((investor_id) => {
-            db.query("SELECT startup_id FROM FUNDING_ROUND WHERE round_id=?", [round_id], (err, r) => {
-              if (err) return rollbackAndSend(err);
-              if (r.length === 0) return rollbackAndSend("Invalid round");
-
-              const startup_id = r[0].startup_id;
-
-              db.query("SELECT NOW() as now", (err, timeRes) => {
-                if (err) return rollbackAndSend(err);
-                const snapshotTime = timeRes[0].now;
-
-                db.query(
-                  `SELECT founder_id, investor_id, equity_percentage
-                   FROM (
-                     SELECT *,
-                            ROW_NUMBER() OVER (
-                              PARTITION BY COALESCE(founder_id, investor_id)
-                              ORDER BY recorded_at DESC
-                            ) as rn
-                     FROM EQUITY_HISTORY
-                     WHERE startup_id=?
-                   ) t
-                   WHERE rn = 1`,
-                  [startup_id],
-                  (err, lastData) => {
-                    if (err) return rollbackAndSend(err);
-
-                    const factor = (100 - equityNum) / 100;
-                    let historyQueries = [];
-
-                    if (!lastData || lastData.length === 0) {
-                      db.query(
-                        "SELECT founder_id, initial_equity FROM FOUNDER WHERE startup_id=?",
-                        [startup_id],
-                        (err3, founders) => {
-                          if (err3) return rollbackAndSend(err3);
-
-                          if (founders && founders.length > 0) {
-                            founders.forEach((founder) => {
-                              historyQueries.push({
-                                query: `INSERT INTO EQUITY_HISTORY (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at) VALUES (?, ?, ?, NULL, ?, ?)`,
-                                values: [startup_id, round_id, founder.founder_id, Number((founder.initial_equity * factor).toFixed(4)), snapshotTime],
-                              });
-                            });
-                          }
-                          // Add the new investor
-                          historyQueries.push({
-                            query: `INSERT INTO EQUITY_HISTORY (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at) VALUES (?, ?, NULL, ?, ?, ?)`,
-                            values: [startup_id, round_id, investor_id, equityNum, snapshotTime],
-                          });
-                          executeHistoryQueries();
-                        }
-                      );
-                    } else {
-                      let investorHandled = false;
-                      lastData.forEach((row) => {
-                        let newEquity = row.equity_percentage * factor;
-                        if (row.investor_id === investor_id) {
-                          newEquity += equityNum;
-                          investorHandled = true;
-                        }
-                        historyQueries.push({
-                          query: `INSERT INTO EQUITY_HISTORY (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at) VALUES (?, ?, ?, ?, ?, ?)`,
-                          values: [startup_id, round_id, row.founder_id, row.investor_id, Number(newEquity.toFixed(4)), snapshotTime],
-                        });
-                      });
-
-                      if (!investorHandled) {
-                        historyQueries.push({
-                          query: `INSERT INTO EQUITY_HISTORY (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at) VALUES (?, ?, NULL, ?, ?, ?)`,
-                          values: [startup_id, round_id, investor_id, equityNum, snapshotTime],
-                        });
-                      }
-                      executeHistoryQueries();
-                    }
-
-                    function executeHistoryQueries() {
-                      Promise.all(
-                        historyQueries.map(
-                          (q) =>
-                            new Promise((res, rej) =>
-                              db.query(q.query, q.values, (e) => (e ? rej(e) : res()))
-                            )
-                        )
-                      )
-                        .then(() => {
-                          db.query(
-                            `INSERT INTO INVESTMENT (round_id, investor_id, amount_invested, equity_acquired, deal_reference) VALUES (?, ?, ?, ?, ?)`,
-                            [round_id, investor_id, amount, equityNum, deal_reference || null],
-                            (err) => {
-                              if (err) return rollbackAndSend(err);
-
-                              db.commit((err) => {
-                                if (err) return rollbackAndSend(err);
-                                res.send("Investment added successfully");
-                              });
-                            }
-                          );
-                        })
-                        .catch((e) => rollbackAndSend(e));
-                    }
-                  }
-                );
-              });
-            });
-          })
-          .catch((e) => rollbackAndSend(e));
-      }
+  for (const holder of holders) {
+    await connection.execute(
+      `INSERT INTO EQUITY_HISTORY
+       (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        startupId,
+        roundId,
+        holder.founder_id || null,
+        holder.investor_id || null,
+        Number(holder.equity_percentage),
+        recordedAt,
+      ],
     );
-  });
-});
-// ================= CAP TABLE =================
-app.get("/history/:startup_id", (req, res) => {
-  const startupId = req.params.startup_id;
+  }
+}
 
-  db.query(
-    `SELECT startup_id, startup_name, founded_year
-     FROM STARTUP
-     WHERE startup_id = ?`,
-    [startupId],
-    (startupErr, startupRes) => {
-      if (startupErr) return res.status(500).send(startupErr.sqlMessage);
-      if (startupRes.length === 0) return res.json([]);
+// -------------------- AUTH --------------------
+app.post("/signup", async (req, res) => {
+  const { username, email, password, role } = req.body || {};
 
-      db.query(
-        `SELECT founder_id, founder_name, founder_role, initial_equity
-         FROM FOUNDER
-         WHERE startup_id = ?
-         ORDER BY founder_name`,
-        [startupId],
-        (founderErr, founders) => {
-          if (founderErr) return res.status(500).send(founderErr.sqlMessage);
+  if (typeof username !== "string" || username.trim().length < 2 || username.trim().length > 100) return publicError(res, 400, "Username must contain 2-100 characters.");
+  if (!validEmail(email)) return publicError(res, 400, "Invalid email address.");
+  if (typeof password !== "string" || password.length < 8) return publicError(res, 400, "Password must contain at least 8 characters.");
+  if (!["founder", "investor"].includes(role)) return publicError(res, 400, "Invalid account role.");
 
-          db.query(
-            `SELECT round_id, round_type, round_date
-             FROM FUNDING_ROUND
-             WHERE startup_id = ?
-             ORDER BY
-               CASE round_type
-                 WHEN 'Initial' THEN 0
-                 WHEN 'Pre-Seed' THEN 1
-                 WHEN 'Seed' THEN 2
-                 WHEN 'Series A' THEN 3
-                 WHEN 'Series B' THEN 4
-                 WHEN 'Series C' THEN 5
-                 ELSE 6
-               END,
-               round_date ASC`,
-            [startupId],
-            (roundErr, rounds) => {
-              if (roundErr) return res.status(500).send(roundErr.sqlMessage);
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
 
-              db.query(
-                `SELECT
-                   i.round_id,
-                   i.investor_id,
-                   inv.investor_name,
-                   i.equity_acquired
-                 FROM INVESTMENT i
-                 JOIN FUNDING_ROUND fr ON i.round_id = fr.round_id
-                 JOIN INVESTOR inv ON i.investor_id = inv.investor_id
-                 WHERE fr.startup_id = ?
-                 ORDER BY fr.round_date ASC, inv.investor_name ASC`,
-                [startupId],
-                (investmentErr, investments) => {
-                  if (investmentErr) {
-                    return res.status(500).send(investmentErr.sqlMessage);
-                  }
-
-                  const startup = startupRes[0];
-                  const historyRows = [];
-                  const ownership = new Map();
-                  const roundInvestments = investments.reduce(
-                    (acc, investment) => {
-                      if (!acc[investment.round_id])
-                        acc[investment.round_id] = [];
-                      acc[investment.round_id].push(investment);
-                      return acc;
-                    },
-                    {},
-                  );
-
-                  founders.forEach((founder) => {
-                    ownership.set(`Founder:${founder.founder_id}`, {
-                      stakeholder_id: founder.founder_id,
-                      stakeholder: founder.founder_name,
-                      stakeholder_type: "Founder",
-                      stakeholder_label: normalizeFounderLabel(
-                        founder.founder_role,
-                      ),
-                      equity_percentage: Number(founder.initial_equity) || 0,
-                    });
-                  });
-
-                  const hasExplicitInitial = rounds.some(
-                    (round) => round.round_type === "Initial",
-                  );
-
-                  if (ownership.size > 0 && !hasExplicitInitial) {
-                    const initialDate = `${startup.founded_year || new Date().getFullYear()}-01-01`;
-                    historyRows.push(
-                      ...buildSnapshotRows({
-                        round_id: `INIT-${startupId}`,
-                        round_type: "Initial",
-                        round_date: initialDate,
-                        ownership,
-                      }),
-                    );
-                  }
-
-                  rounds.forEach((round) => {
-                    const roundEntries = roundInvestments[round.round_id] || [];
-
-                    if (round.round_type === "Initial") {
-                      if (ownership.size === 0 && roundEntries.length === 0) {
-                        return;
-                      }
-
-                      if (roundEntries.length > 0) {
-                        applyInvestmentsToOwnership(ownership, roundEntries);
-                      }
-
-                      historyRows.push(
-                        ...buildSnapshotRows({
-                          round_id: round.round_id,
-                          round_type: round.round_type,
-                          round_date: round.round_date,
-                          ownership,
-                        }),
-                      );
-                      return;
-                    }
-
-                    if (roundEntries.length > 0) {
-                      applyInvestmentsToOwnership(ownership, roundEntries);
-                    }
-
-                    historyRows.push(
-                      ...buildSnapshotRows({
-                        round_id: round.round_id,
-                        round_type: round.round_type,
-                        round_date: round.round_date,
-                        ownership,
-                      }),
-                    );
-                  });
-
-                  res.json(historyRows);
-                },
-              );
-            },
-          );
-        },
-      );
-    },
-  );
-
-  function applyInvestmentsToOwnership(currentOwnership, roundEntries) {
-    const totalRoundEquity = roundEntries.reduce(
-      (sum, entry) => sum + (Number(entry.equity_acquired) || 0),
-      0,
+    const passwordHash = await bcrypt.hash(password, 12);
+    const [result] = await connection.execute(
+      "INSERT INTO USERS (username, email, password, role) VALUES (?, ?, ?, ?)",
+      [username.trim(), email.trim().toLowerCase(), passwordHash, role],
     );
 
-    const dilutionFactor = (100 - totalRoundEquity) / 100;
-
-    Array.from(currentOwnership.values()).forEach((holder) => {
-      holder.equity_percentage = Number(
-        (holder.equity_percentage * dilutionFactor).toFixed(4),
+    if (role === "investor") {
+      await connection.execute(
+        `INSERT INTO INVESTOR (investor_name, firm_name, investor_type, country, user_id)
+         VALUES (?, 'Independent Investor', 'Angel', 'India', ?)`,
+        [username.trim(), result.insertId],
       );
-    });
-
-    roundEntries.forEach((entry) => {
-      const key = `Investor:${entry.investor_id}`;
-      const acquired = Number(entry.equity_acquired) || 0;
-
-      if (currentOwnership.has(key)) {
-        currentOwnership.get(key).equity_percentage = Number(
-          (currentOwnership.get(key).equity_percentage + acquired).toFixed(4),
-        );
-      } else {
-        currentOwnership.set(key, {
-          stakeholder_id: entry.investor_id,
-          stakeholder: entry.investor_name,
-          stakeholder_type: "Investor",
-          equity_percentage: acquired,
-        });
-      }
-    });
-  }
-
-  function buildSnapshotRows({ round_id, round_type, round_date, ownership }) {
-    return Array.from(ownership.values())
-      .filter((holder) => holder.equity_percentage > 0)
-      .sort((left, right) => left.stakeholder.localeCompare(right.stakeholder))
-      .map((holder, index) => ({
-        round_id,
-        round_type,
-        round_date,
-        stakeholder_id: holder.stakeholder_id,
-        stakeholder: holder.stakeholder,
-        stakeholder_type: holder.stakeholder_type,
-        stakeholder_label: holder.stakeholder_label || holder.stakeholder_type,
-        equity_percentage: Number(holder.equity_percentage.toFixed(2)),
-        recorded_at: `${round_date}T00:00:${String(index).padStart(2, "0")}.000Z`,
-      }));
-  }
-
-  function normalizeFounderLabel(founderRole) {
-    const roleText = String(founderRole || "").trim();
-    const normalizedRole = roleText.toLowerCase();
-
-    if (!normalizedRole) return "Founder";
-    if (
-      normalizedRole.includes("co-founder") ||
-      normalizedRole.includes("cofounder")
-    ) {
-      return roleText;
     }
-    if (normalizedRole.includes("founder")) {
-      return roleText;
-    }
-    return `Co-Founder & ${roleText}`;
+
+    await connection.commit();
+    return res.status(201).json({ message: "Signup successful" });
+  } catch (error) {
+    await connection.rollback();
+    return handleDbError(res, error);
+  } finally {
+    connection.release();
   }
 });
 
-// ================= EXTRA (USED IN UI) =================
-app.get("/allRounds", (req, res) => {
-  db.query(
-    `SELECT
-       fr.round_id,
-       fr.round_type,
-       fr.round_date,
-       fr.valuation,
-       fr.total_amount_raised AS target_funding,
-       s.startup_id,
-       s.startup_name,
-       s.stage,
-       s.city,
-       s.country,
-       COALESCE(inv_summary.amount_raised, 0)   AS amount_raised,
-       COALESCE(inv_summary.investor_count, 0)  AS investor_count
-     FROM FUNDING_ROUND fr
-     JOIN STARTUP s ON fr.startup_id = s.startup_id
-     JOIN (
-       SELECT startup_id, MAX(round_date) AS max_date
-       FROM FUNDING_ROUND
-       GROUP BY startup_id
-     ) latest ON fr.startup_id = latest.startup_id
-       AND fr.round_date = latest.max_date
-     LEFT JOIN (
-       SELECT i.round_id,
-              SUM(i.amount_invested)       AS amount_raised,
-              COUNT(DISTINCT i.investor_id) AS investor_count
+app.post("/login", async (req, res) => {
+  const { email, password } = req.body || {};
+  if (!validEmail(email) || typeof password !== "string") return publicError(res, 400, "Invalid login details.");
+
+  try {
+    const [users] = await pool.execute(
+      `SELECT u.user_id, u.username, u.email, u.password, u.role, i.investor_id
+       FROM USERS u
+       LEFT JOIN INVESTOR i ON i.user_id = u.user_id
+       WHERE LOWER(u.email) = LOWER(?) LIMIT 1`,
+      [email.trim()],
+    );
+
+    if (users.length === 0) return publicError(res, 401, "Invalid email or password.");
+    const user = users[0];
+    const matches = await bcrypt.compare(password, user.password);
+    if (!matches) return publicError(res, 401, "Invalid email or password.");
+
+    // Legacy seed accounts are linked once at login if their email/name already matches.
+    if (user.role === "founder") {
+      await pool.execute(
+        `UPDATE FOUNDER SET user_id = ?
+         WHERE user_id IS NULL AND founder_email IS NOT NULL AND LOWER(founder_email) = LOWER(?)`,
+        [user.user_id, user.email],
+      );
+    } else if (!user.investor_id) {
+      const [investor] = await pool.execute(
+        "SELECT investor_id FROM INVESTOR WHERE user_id IS NULL AND LOWER(investor_name) = LOWER(?) LIMIT 1",
+        [user.username],
+      );
+      if (investor.length > 0) {
+        await pool.execute("UPDATE INVESTOR SET user_id = ? WHERE investor_id = ?", [user.user_id, investor[0].investor_id]);
+        user.investor_id = investor[0].investor_id;
+      }
+    }
+
+    const token = createToken();
+    await pool.execute(
+      `INSERT INTO AUTH_SESSION (user_id, token_hash, expires_at)
+       VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? DAY))`,
+      [user.user_id, hashToken(token), SESSION_DAYS],
+    );
+
+    return res.json({
+      user_id: user.user_id,
+      username: user.username,
+      role: user.role,
+      investor_id: user.investor_id || null,
+      token,
+    });
+  } catch (error) {
+    return handleDbError(res, error);
+  }
+});
+
+app.post("/logout", requireAuth, async (req, res) => {
+  try {
+    const token = (req.headers.authorization || "").slice(7).trim();
+    await pool.execute("DELETE FROM AUTH_SESSION WHERE token_hash = ?", [hashToken(token)]);
+    return res.json({ message: "Logged out successfully" });
+  } catch (error) {
+    return handleDbError(res, error);
+  }
+});
+
+// -------------------- STARTUPS --------------------
+app.post("/addStartup", requireAuth, requireRole("founder"), async (req, res) => {
+  const { startup_name, founded_year, stage, industry_id, city, state, country } = req.body || {};
+  if (!startup_name || !founded_year || !stage || !industry_id || !city || !state || !country) return publicError(res, 400, "All startup fields are required.");
+
+  try {
+    const [result] = await pool.execute(
+      `INSERT INTO STARTUP
+       (startup_name, founded_year, stage, industry_id, city, state, country, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [startup_name.trim(), founded_year, stage, industry_id, city.trim(), state.trim(), country.trim(), req.user.user_id],
+    );
+    return res.status(201).json({ message: "Startup added", startup_id: result.insertId });
+  } catch (error) {
+    return handleDbError(res, error);
+  }
+});
+
+app.get("/startups/:user_id", requireAuth, async (req, res) => {
+  if (Number(req.params.user_id) !== Number(req.user.user_id)) return publicError(res, 403, "You can only access your own startup workspace.");
+  try {
+    const [rows] = await pool.execute(
+      `SELECT DISTINCT s.*
+       FROM STARTUP s
+       LEFT JOIN FOUNDER f ON f.startup_id = s.startup_id
+       WHERE s.user_id = ? OR f.user_id = ?
+       ORDER BY s.startup_name`,
+      [req.user.user_id, req.user.user_id],
+    );
+    res.json(rows);
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+// -------------------- FOUNDERS --------------------
+app.post("/addFounder", requireAuth, requireRole("founder"), async (req, res) => {
+  const { founders, startup_id } = req.body || {};
+  if (!Array.isArray(founders) || founders.length === 0 || !Number.isInteger(Number(startup_id))) return publicError(res, 400, "Startup and founders are required.");
+
+  const equityValues = founders.map((founder) => Number(founder.equity));
+  if (equityValues.some((value) => !Number.isFinite(value) || value <= 0 || value > 100)) return publicError(res, 400, "Founder equity must be between 0 and 100%.");
+
+  if (!(await ownsStartup(req.user.user_id, Number(startup_id)))) return publicError(res, 403, "You do not own this startup.");
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [existingInvestments] = await connection.execute(
+      `SELECT COUNT(*) AS count
        FROM INVESTMENT i
-       GROUP BY i.round_id
-     ) inv_summary ON inv_summary.round_id = fr.round_id
-     ORDER BY s.startup_name`,
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.json(result);
-    },
-  );
-});
-app.get("/capTable/:startup_id", (req, res) => {
-  const startup_id = req.params.startup_id;
+       JOIN FUNDING_ROUND fr ON fr.round_id = i.round_id
+       WHERE fr.startup_id = ?`,
+      [startup_id],
+    );
+    if (Number(existingInvestments[0].count) > 0) {
+      await connection.rollback();
+      return publicError(res, 409, "Founders cannot be added after investments have been recorded.");
+    }
 
-  // Γ£à Show current equity state for each stakeholder
-  db.query(
-    `SELECT
-      COALESCE(f.founder_name, i.investor_name) AS stakeholder,
-      CASE WHEN eh.founder_id IS NOT NULL THEN 'Founder' ELSE 'Investor' END AS stakeholder_type,
-      CASE
-        WHEN eh.founder_id IS NOT NULL THEN
-          CASE
-            WHEN TRIM(COALESCE(f.founder_role, '')) = '' THEN 'Founder'
-            WHEN LOWER(COALESCE(f.founder_role, '')) LIKE '%co-founder%' OR LOWER(COALESCE(f.founder_role, '')) LIKE '%cofounder%' THEN f.founder_role
-            WHEN LOWER(COALESCE(f.founder_role, '')) LIKE '%founder%' THEN f.founder_role
-            ELSE CONCAT('Co-Founder & ', f.founder_role)
-          END
-        ELSE 'Investor'
-      END AS stakeholder_label,
-      SUM(eh.equity_percentage) AS equity_percentage
-    FROM (
-      SELECT *,
-        ROW_NUMBER() OVER (
-          PARTITION BY COALESCE(founder_id, investor_id), (CASE WHEN founder_id IS NOT NULL THEN 'Founder' ELSE 'Investor' END)
-          ORDER BY recorded_at DESC
-        ) AS rn
-      FROM EQUITY_HISTORY
-      WHERE startup_id=?
-    ) eh
-    LEFT JOIN FOUNDER f ON eh.founder_id = f.founder_id
-    LEFT JOIN INVESTOR i ON eh.investor_id = i.investor_id
-    WHERE eh.rn = 1
-    GROUP BY stakeholder, stakeholder_type, stakeholder_label`,
-    [startup_id],
-    (err2, result) => {
-      if (err2) return res.status(500).send(err2.sqlMessage);
-      res.json(result);
-    },
-  );
-});
+    const [existing] = await connection.execute("SELECT COALESCE(SUM(initial_equity), 0) AS total FROM FOUNDER WHERE startup_id = ? FOR UPDATE", [startup_id]);
+    const total = Number(existing[0].total) + equityValues.reduce((a, b) => a + b, 0);
+    if (total > 100.01) {
+      await connection.rollback();
+      return publicError(res, 400, "Founder ownership cannot exceed 100%.");
+    }
 
-app.get("/capTableAtDate/:startup_id", (req, res) => {
-  const startup_id = req.params.startup_id;
-  const asOfDate = req.query.asOfDate; // YYYY-MM-DD format expected
+    let [rounds] = await connection.execute("SELECT round_id FROM FUNDING_ROUND WHERE startup_id = ? ORDER BY round_date DESC LIMIT 1 FOR UPDATE", [startup_id]);
+    let roundId;
+    if (rounds.length === 0) {
+      const [round] = await connection.execute(
+        `INSERT INTO FUNDING_ROUND (round_type, round_date, target_funding, amount_raised, valuation, total_amount_raised, startup_id)
+         VALUES ('Initial', CURDATE(), 0, 0, 0, 0, ?)`,
+        [startup_id],
+      );
+      roundId = round.insertId;
+    } else {
+      roundId = rounds[0].round_id;
+    }
 
-  if (!asOfDate) {
-    return res.status(400).send("asOfDate query parameter is required.");
-  }
+    const [nowRows] = await connection.query("SELECT NOW(6) AS snapshot_time");
+    const snapshotTime = nowRows[0].snapshot_time;
 
-  db.query(
-    `SELECT
-      COALESCE(f.founder_name, i.investor_name) AS stakeholder,
-      CASE WHEN eh.founder_id IS NOT NULL THEN 'Founder' ELSE 'Investor' END AS stakeholder_type,
-      CASE
-        WHEN eh.founder_id IS NOT NULL THEN
-          CASE
-            WHEN TRIM(COALESCE(f.founder_role, '')) = '' THEN 'Founder'
-            WHEN LOWER(COALESCE(f.founder_role, '')) LIKE '%co-founder%' OR LOWER(COALESCE(f.founder_role, '')) LIKE '%cofounder%' THEN f.founder_role
-            WHEN LOWER(COALESCE(f.founder_role, '')) LIKE '%founder%' THEN f.founder_role
-            ELSE CONCAT('Co-Founder & ', f.founder_role)
-          END
-        ELSE 'Investor'
-      END AS stakeholder_label,
-      SUM(eh.equity_percentage) AS equity_percentage
-    FROM (
-      SELECT *,
-        ROW_NUMBER() OVER (
-          PARTITION BY COALESCE(founder_id, investor_id), (CASE WHEN founder_id IS NOT NULL THEN 'Founder' ELSE 'Investor' END)
-          ORDER BY recorded_at DESC
-        ) AS rn
-      FROM EQUITY_HISTORY
-      WHERE startup_id=? AND DATE(recorded_at) <= ?
-    ) eh
-    LEFT JOIN FOUNDER f ON eh.founder_id = f.founder_id
-    LEFT JOIN INVESTOR i ON eh.investor_id = i.investor_id
-    WHERE eh.rn = 1
-    GROUP BY stakeholder, stakeholder_type, stakeholder_label`,
-    [startup_id, asOfDate],
-    (err2, result) => {
-      if (err2) return res.status(500).send(err2.sqlMessage);
-      res.json(result);
-    },
-  );
-});
-// ================= GET INVESTOR =================
-app.get("/getInvestor/:user_id", (req, res) => {
-  db.query(
-    "SELECT investor_id FROM INVESTOR WHERE user_id=?",
-    [req.params.user_id],
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-
-      if (result.length === 0) {
-        return res.json({ investor_id: null });
+    for (const founder of founders) {
+      let linkedUserId = null;
+      if (validEmail(founder.email)) {
+        const [users] = await connection.execute("SELECT user_id FROM USERS WHERE LOWER(email) = LOWER(?) LIMIT 1", [founder.email.trim()]);
+        linkedUserId = users[0]?.user_id || null;
       }
 
-      res.json({ investor_id: result[0].investor_id });
-    },
-  );
+      const [inserted] = await connection.execute(
+        `INSERT INTO FOUNDER (founder_name, founder_email, founder_role, initial_equity, startup_id, user_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [founder.name?.trim(), founder.email?.trim() || null, founder.role?.trim() || "Co-Founder", founder.equity, startup_id, linkedUserId],
+      );
+
+      await connection.execute(
+        `INSERT INTO EQUITY_HISTORY (startup_id, round_id, founder_id, investor_id, equity_percentage, recorded_at)
+         VALUES (?, ?, ?, NULL, ?, ?)`,
+        [startup_id, roundId, inserted.insertId, founder.equity, snapshotTime],
+      );
+    }
+
+    await connection.commit();
+    res.status(201).json({ message: "All founders added" });
+  } catch (error) {
+    await connection.rollback();
+    handleDbError(res, error);
+  } finally {
+    connection.release();
+  }
 });
 
-// ================= MY INVESTMENTS =================
-app.get("/myInvestments/:investor_id", (req, res) => {
-  db.query(
-    `SELECT 
-      s.startup_name,
-      fr.round_type,
-      i.amount_invested,
-      i.equity_acquired
-     FROM INVESTMENT i
-     JOIN FUNDING_ROUND fr ON i.round_id = fr.round_id
-     JOIN STARTUP s ON fr.startup_id = s.startup_id
-     WHERE i.investor_id = ?`,
-    [req.params.investor_id],
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.json(result);
-    },
-  );
-});
-// ================= INVESTOR SUMMARY =================
-app.get("/investorSummary/:investor_id", (req, res) => {
-  db.query(
-    `SELECT 
-      SUM(amount_invested) AS total_invested,
-      COUNT(DISTINCT fr.startup_id) AS total_startups,
-      SUM(equity_acquired) AS total_equity
-     FROM INVESTMENT i
-     JOIN FUNDING_ROUND fr ON i.round_id = fr.round_id
-     WHERE i.investor_id = ?`,
-    [req.params.investor_id],
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-      res.json(result[0]);
-    },
-  );
+app.get("/founders/:user_id", requireAuth, async (req, res) => {
+  if (Number(req.params.user_id) !== Number(req.user.user_id)) return publicError(res, 403, "You can only access your own founder workspace.");
+  try {
+    const [rows] = await pool.execute(
+      `SELECT DISTINCT f.*, s.startup_name
+       FROM FOUNDER f JOIN STARTUP s ON s.startup_id = f.startup_id
+       WHERE s.user_id = ? OR f.user_id = ?
+       ORDER BY s.startup_name, f.founder_name`,
+      [req.user.user_id, req.user.user_id],
+    );
+    res.json(rows);
+  } catch (error) {
+    handleDbError(res, error);
+  }
 });
 
-// ================= ALL STARTUPS =================
-app.get("/allStartups", (req, res) => {
-  db.query("SELECT * FROM STARTUP", (err, result) => {
-    if (err) return res.status(500).send(err.sqlMessage);
-    res.json(result);
-  });
-});
-app.get("/startupDashboard/:startup_id", (req, res) => {
-  const startup_id = req.params.startup_id;
+// -------------------- FUNDING --------------------
+app.post("/addFunding", requireAuth, requireRole("founder"), async (req, res) => {
+  const { startup_id, round_type, round_date, valuation, target_funding, total_amount_raised, amount_raised } = req.body || {};
+  if (!(await ownsStartup(req.user.user_id, Number(startup_id)))) return publicError(res, 403, "You do not own this startup.");
+  if (!validDate(round_date) || !round_type || !validPositiveNumber(valuation)) return publicError(res, 400, "Invalid funding round details.");
 
-  db.query(
-    `SELECT 
-      s.startup_name,
-      s.stage,
+  const target = Number(target_funding ?? total_amount_raised ?? 0);
+  const raised = Number(amount_raised ?? total_amount_raised ?? 0);
+  if (!Number.isFinite(target) || target < 0 || !Number.isFinite(raised) || raised < 0 || raised > target && target > 0) return publicError(res, 400, "Invalid funding amounts.");
 
-      -- latest round
-      (SELECT fr.round_type 
-      FROM FUNDING_ROUND fr 
-      WHERE fr.startup_id = s.startup_id 
-      AND fr.round_type != 'Initial'
-      ORDER BY fr.round_date DESC 
-      LIMIT 1) AS latest_round,
+  try {
+    const [rounds] = await pool.execute("SELECT round_type, round_date FROM FUNDING_ROUND WHERE startup_id = ? ORDER BY round_date", [startup_id]);
+    const order = ["Pre-Seed", "Seed", "Series A", "Series B", "Series C"];
+    const newIndex = order.indexOf(round_type);
+    if (newIndex < 0) return publicError(res, 400, "Invalid funding stage.");
 
-      -- latest valuation
-      (SELECT fr.valuation 
-      FROM FUNDING_ROUND fr 
-      WHERE fr.startup_id = s.startup_id 
-      AND fr.valuation > 0
-      ORDER BY fr.round_date DESC 
-      LIMIT 1) AS valuation,
+    for (const existing of rounds) {
+      const existingIndex = order.indexOf(existing.round_type);
+      if (existingIndex >= 0 && existingIndex < newIndex && round_date < String(existing.round_date)) return publicError(res, 400, "Funding round dates must follow the funding-stage order.");
+      if (existingIndex >= 0 && existingIndex > newIndex && round_date > String(existing.round_date)) return publicError(res, 400, "Funding round dates must follow the funding-stage order.");
+    }
 
-      -- Γ£à CORRECT total funding
-      (SELECT COALESCE(SUM(i.amount_invested),0)
-      FROM INVESTMENT i
-      JOIN FUNDING_ROUND fr ON i.round_id = fr.round_id
-      WHERE fr.startup_id = s.startup_id
-      ) AS total_funding,
-
-      (SELECT COALESCE(SUM(fr.total_amount_raised),0)
-      FROM FUNDING_ROUND fr
-      WHERE fr.startup_id = s.startup_id
-      AND fr.total_amount_raised > 0
-      ) AS target_funding,
-
-      -- Γ£à CORRECT total investors
-      (SELECT COUNT(DISTINCT i.investor_id)
-      FROM INVESTMENT i
-      JOIN FUNDING_ROUND fr ON i.round_id = fr.round_id
-      WHERE fr.startup_id = s.startup_id
-      ) AS total_investors,
-
-      -- Γ£à latest founder equity (your logic is good ≡ƒæì)
-      (
-    SELECT COALESCE(SUM(equity_percentage),0)
-    FROM (
-      SELECT equity_percentage
-      FROM (
-        SELECT *,
-              ROW_NUMBER() OVER (
-                PARTITION BY founder_id
-                ORDER BY recorded_at DESC
-              ) as rn
-        FROM EQUITY_HISTORY
-        WHERE startup_id = s.startup_id AND founder_id IS NOT NULL
-      ) t
-      WHERE rn = 1
-    ) latest
-  ) AS founder_equity
-
-    FROM STARTUP s
-    WHERE s.startup_id = ?;`,
-    [startup_id],
-    (err, result) => {
-      if (err) return res.status(500).send(err.sqlMessage);
-
-      console.log("Dashboard Data:", result[0]); // ≡ƒöÑ DEBUG
-
-      res.json(result[0]);
-    },
-  );
+    const [result] = await pool.execute(
+      `INSERT INTO FUNDING_ROUND (round_type, round_date, target_funding, amount_raised, valuation, total_amount_raised, startup_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [round_type, round_date, target, raised, valuation, raised, startup_id],
+    );
+    await pool.execute("UPDATE STARTUP SET stage = ? WHERE startup_id = ?", [round_type, startup_id]);
+    res.status(201).json({ message: "Funding added", round_id: result.insertId });
+  } catch (error) {
+    handleDbError(res, error);
+  }
 });
 
-// ================= SERVER =================
-app.listen(5000, () => {
-  console.log("Server running on http://localhost:5000");
-  console.log("Backend file:", __filename);
-  console.log("Working directory:", process.cwd());
+app.get("/fundingRounds/:startup_id", async (req, res) => {
+  try {
+    const [rows] = await pool.execute("SELECT round_id, round_type, round_date, target_funding, amount_raised, valuation FROM FUNDING_ROUND WHERE startup_id = ? ORDER BY round_date", [req.params.startup_id]);
+    res.json(rows);
+  } catch (error) {
+    handleDbError(res, error);
+  }
 });
+
+app.get("/funding/:user_id", requireAuth, async (req, res) => {
+  if (Number(req.params.user_id) !== Number(req.user.user_id)) return publicError(res, 403, "You can only access your own funding data.");
+  try {
+    const [rows] = await pool.execute(
+      `SELECT DISTINCT fr.*, s.startup_name
+       FROM FUNDING_ROUND fr JOIN STARTUP s ON s.startup_id = fr.startup_id
+       LEFT JOIN FOUNDER f ON f.startup_id = s.startup_id
+       WHERE s.user_id = ? OR f.user_id = ?
+       ORDER BY fr.round_date`,
+      [req.user.user_id, req.user.user_id],
+    );
+    res.json(rows);
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+// -------------------- INVESTORS --------------------
+app.get("/investors", async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT investor_id, investor_name, firm_name, investor_type, country
+       FROM INVESTOR WHERE is_visible = 1 ORDER BY investor_name`,
+    );
+    res.json(rows);
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+app.post("/addInvestor", requireAuth, async (req, res) => {
+  const { name, firm, type, country } = req.body || {};
+  if (!name || !firm || !type || !country) return publicError(res, 400, "All investor fields are required.");
+  try {
+    const linkedUserId = req.user.role === "investor" ? req.user.user_id : null;
+    const [result] = await pool.execute(
+      `INSERT INTO INVESTOR (investor_name, firm_name, investor_type, country, user_id)
+       VALUES (?, ?, ?, ?, ?)`,
+      [name.trim(), firm.trim(), type, country.trim(), linkedUserId],
+    );
+    res.status(201).json({ message: "Investor added", investor_id: result.insertId });
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+app.put("/updateInvestor", requireAuth, async (req, res) => {
+  const { id, name, firm, type, country } = req.body || {};
+  try {
+    const [rows] = await pool.execute("SELECT user_id FROM INVESTOR WHERE investor_id = ?", [id]);
+    if (rows.length === 0) return publicError(res, 404, "Investor not found.");
+    if (req.user.role === "investor" && Number(rows[0].user_id) !== Number(req.user.user_id)) return publicError(res, 403, "You can only update your own investor profile.");
+
+    await pool.execute(
+      "UPDATE INVESTOR SET investor_name = ?, firm_name = ?, investor_type = ?, country = ? WHERE investor_id = ?",
+      [name.trim(), firm.trim(), type, country.trim(), id],
+    );
+    res.json({ message: "Investor updated" });
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+app.delete("/deleteInvestor/:id", requireAuth, requireRole("founder"), async (req, res) => {
+  try {
+    await pool.execute("UPDATE INVESTOR SET is_visible = 0 WHERE investor_id = ?", [req.params.id]);
+    res.json({ message: "Investor hidden successfully" });
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+// -------------------- INVESTMENTS --------------------
+app.post("/addInvestment", requireAuth, requireRole("investor"), async (req, res) => {
+  const { round_id, amount, equity, deal_reference, investment_date } = req.body || {};
+  const equityNumber = Number(equity);
+  const amountNumber = Number(amount);
+  if (!Number.isInteger(Number(round_id)) || !validPositiveNumber(amountNumber) || !Number.isFinite(equityNumber) || equityNumber <= 0 || equityNumber >= 100) return publicError(res, 400, "Invalid investment details.");
+  if (investment_date && !validDate(investment_date)) return publicError(res, 400, "Invalid investment date.");
+
+  const investor = await getInvestorForUser(req.user.user_id);
+  if (!investor) return publicError(res, 403, "Your investor profile is not configured.");
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [rounds] = await connection.execute(
+      `SELECT fr.round_id, fr.round_type, fr.startup_id, fr.amount_raised, fr.target_funding
+       FROM FUNDING_ROUND fr WHERE fr.round_id = ? FOR UPDATE`,
+      [round_id],
+    );
+    if (rounds.length === 0) throw Object.assign(new Error("Invalid funding round."), { statusCode: 400 });
+    const round = rounds[0];
+    if (round.round_type === "Initial") throw Object.assign(new Error("Investments cannot be recorded against the Initial round."), { statusCode: 400 });
+
+    const [duplicate] = await connection.execute("SELECT investment_id FROM INVESTMENT WHERE investor_id = ? AND round_id = ? LIMIT 1", [investor.investor_id, round_id]);
+    if (duplicate.length > 0) throw Object.assign(new Error("This investor already has an investment in this round."), { statusCode: 409 });
+
+    const holders = await latestSnapshot(connection, round.startup_id);
+    if (holders.length === 0) {
+      const [founders] = await connection.execute("SELECT founder_id, initial_equity FROM FOUNDER WHERE startup_id = ?", [round.startup_id]);
+      const founderTotal = founders.reduce((sum, founder) => sum + Number(founder.initial_equity), 0);
+      if (Math.abs(founderTotal - 100) > 0.01) throw Object.assign(new Error("Startup cap table is not initialized to 100%."), { statusCode: 409 });
+      holders.push(...founders.map((founder) => ({ founder_id: founder.founder_id, investor_id: null, equity_percentage: Number(founder.initial_equity) })));
+    }
+
+    const nextSnapshot = applyInvestmentDilution(holders, equityNumber, investor.investor_id, investor.investor_name);
+    const [nowRows] = await connection.query("SELECT NOW(6) AS snapshot_time");
+    const snapshotTime = nowRows[0].snapshot_time;
+
+    await connection.execute(
+      `INSERT INTO INVESTMENT (investor_id, round_id, amount_invested, equity_acquired, investment_date, deal_reference)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [investor.investor_id, round_id, Math.round(amountNumber), equityNumber, investment_date || new Date().toISOString().slice(0, 10), deal_reference?.trim() || null],
+    );
+
+    const newRaised = Number(round.amount_raised || 0) + amountNumber;
+    await connection.execute(
+      "UPDATE FUNDING_ROUND SET amount_raised = ?, total_amount_raised = ? WHERE round_id = ?",
+      [newRaised, newRaised, round_id],
+    );
+
+    await writeSnapshot(connection, round.startup_id, round_id, nextSnapshot, snapshotTime);
+    await connection.commit();
+    res.status(201).json({ message: "Investment added successfully", investor_id: investor.investor_id });
+  } catch (error) {
+    await connection.rollback();
+    if (error.statusCode) return publicError(res, error.statusCode, error.message);
+    if (error.message === "CAP_TABLE_TOTAL_INVALID") return publicError(res, 409, "Investment would create an invalid cap table.");
+    if (error.code === "ER_DUP_ENTRY") return publicError(res, 409, "This investor already has an investment in this round.");
+    handleDbError(res, error);
+  } finally {
+    connection.release();
+  }
+});
+
+app.get("/investments/:user_id", requireAuth, async (req, res) => {
+  if (Number(req.params.user_id) !== Number(req.user.user_id)) return publicError(res, 403, "You can only access your own investment workspace.");
+  try {
+    const [rows] = await pool.execute(
+      `SELECT inv.investor_name, fr.round_type, i.amount_invested, i.equity_acquired, i.investment_date, s.startup_name
+       FROM INVESTMENT i
+       JOIN INVESTOR inv ON inv.investor_id = i.investor_id
+       JOIN FUNDING_ROUND fr ON fr.round_id = i.round_id
+       JOIN STARTUP s ON s.startup_id = fr.startup_id
+       JOIN FOUNDER f ON f.startup_id = s.startup_id
+       WHERE s.user_id = ? OR f.user_id = ?
+       ORDER BY i.investment_date DESC`,
+      [req.user.user_id, req.user.user_id],
+    );
+    res.json(rows);
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+app.get("/getInvestor/:user_id", requireAuth, async (req, res) => {
+  if (Number(req.params.user_id) !== Number(req.user.user_id)) return publicError(res, 403, "Access denied.");
+  try {
+    const investor = await getInvestorForUser(req.user.user_id);
+    res.json({ investor_id: investor?.investor_id || null });
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+app.get("/myInvestments/:investor_id", requireAuth, async (req, res) => {
+  try {
+    const [owners] = await pool.execute("SELECT user_id FROM INVESTOR WHERE investor_id = ?", [req.params.investor_id]);
+    if (owners.length === 0 || Number(owners[0].user_id) !== Number(req.user.user_id)) return publicError(res, 403, "You can only access your own portfolio.");
+    const [rows] = await pool.execute(
+      `SELECT s.startup_name, fr.round_type, i.amount_invested, i.equity_acquired, i.investment_date
+       FROM INVESTMENT i JOIN FUNDING_ROUND fr ON fr.round_id = i.round_id JOIN STARTUP s ON s.startup_id = fr.startup_id
+       WHERE i.investor_id = ? ORDER BY i.investment_date DESC`,
+      [req.params.investor_id],
+    );
+    res.json(rows);
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+app.get("/investorSummary/:investor_id", requireAuth, async (req, res) => {
+  try {
+    const [owners] = await pool.execute("SELECT user_id FROM INVESTOR WHERE investor_id = ?", [req.params.investor_id]);
+    if (owners.length === 0 || Number(owners[0].user_id) !== Number(req.user.user_id)) return publicError(res, 403, "Access denied.");
+    const [rows] = await pool.execute(
+      `SELECT COALESCE(SUM(amount_invested), 0) AS total_invested,
+              COUNT(DISTINCT fr.startup_id) AS total_startups,
+              COALESCE(SUM(equity_acquired), 0) AS total_equity
+       FROM INVESTMENT i JOIN FUNDING_ROUND fr ON fr.round_id = i.round_id
+       WHERE i.investor_id = ?`,
+      [req.params.investor_id],
+    );
+    res.json(rows[0]);
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+// -------------------- CAP TABLE / ANALYTICS --------------------
+app.get("/history/:startup_id", async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT eh.round_id, fr.round_type, fr.round_date,
+              eh.founder_id, eh.investor_id,
+              COALESCE(f.founder_name, i.investor_name) AS stakeholder,
+              CASE WHEN eh.founder_id IS NULL THEN 'Investor' ELSE 'Founder' END AS stakeholder_type,
+              eh.equity_percentage, eh.recorded_at
+       FROM EQUITY_HISTORY eh
+       JOIN FUNDING_ROUND fr ON fr.round_id = eh.round_id
+       LEFT JOIN FOUNDER f ON f.founder_id = eh.founder_id
+       LEFT JOIN INVESTOR i ON i.investor_id = eh.investor_id
+       WHERE eh.startup_id = ?
+       ORDER BY fr.round_date, eh.recorded_at, eh.ownership_id`,
+      [req.params.startup_id],
+    );
+    res.json(rows.map((row) => ({
+      ...row,
+      stakeholder_label: row.stakeholder_type === "Founder" ? "Founder" : "Investor",
+      equity_percentage: Number(row.equity_percentage),
+    })));
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+app.get("/capTable/:startup_id", async (req, res) => {
+  try {
+    const rows = await latestSnapshot(pool, Number(req.params.startup_id));
+    res.json(rows.map((row) => ({
+      stakeholder: row.founder_name || row.investor_name,
+      stakeholder_type: row.founder_id ? "Founder" : "Investor",
+      stakeholder_label: row.founder_id ? "Founder" : "Investor",
+      equity_percentage: Number(row.equity_percentage),
+    })));
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+app.get("/capTableAtDate/:startup_id", async (req, res) => {
+  const asOfDate = req.query.asOfDate;
+  if (!validDate(asOfDate)) return publicError(res, 400, "asOfDate must use YYYY-MM-DD format.");
+  try {
+    const [rows] = await pool.execute(
+      `SELECT eh.founder_id, eh.investor_id,
+              COALESCE(f.founder_name, i.investor_name) AS stakeholder,
+              CASE WHEN eh.founder_id IS NULL THEN 'Investor' ELSE 'Founder' END AS stakeholder_type,
+              eh.equity_percentage
+       FROM EQUITY_HISTORY eh
+       LEFT JOIN FOUNDER f ON f.founder_id = eh.founder_id
+       LEFT JOIN INVESTOR i ON i.investor_id = eh.investor_id
+       WHERE eh.startup_id = ?
+         AND eh.recorded_at = (
+           SELECT MAX(recorded_at) FROM EQUITY_HISTORY
+           WHERE startup_id = ? AND recorded_at < DATE_ADD(?, INTERVAL 1 DAY)
+         )
+       ORDER BY eh.ownership_id`,
+      [req.params.startup_id, req.params.startup_id, asOfDate],
+    );
+    res.json(rows.map((row) => ({ ...row, stakeholder_label: row.stakeholder_type, equity_percentage: Number(row.equity_percentage) })));
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+app.get("/allRounds", async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT fr.round_id, fr.round_type, fr.round_date, fr.valuation,
+              fr.target_funding, fr.amount_raised, s.startup_id, s.startup_name, s.stage, s.city, s.country,
+              COALESCE(x.investor_count, 0) AS investor_count
+       FROM FUNDING_ROUND fr JOIN STARTUP s ON s.startup_id = fr.startup_id
+       JOIN (SELECT startup_id, MAX(round_date) max_date FROM FUNDING_ROUND GROUP BY startup_id) latest
+         ON latest.startup_id = fr.startup_id AND latest.max_date = fr.round_date
+       LEFT JOIN (SELECT round_id, COUNT(DISTINCT investor_id) investor_count FROM INVESTMENT GROUP BY round_id) x
+         ON x.round_id = fr.round_id
+       ORDER BY s.startup_name`,
+    );
+    res.json(rows);
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+app.get("/startupDashboard/:startup_id", async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT s.startup_name, s.stage,
+         (SELECT fr.round_type FROM FUNDING_ROUND fr WHERE fr.startup_id=s.startup_id AND fr.round_type <> 'Initial' ORDER BY fr.round_date DESC LIMIT 1) latest_round,
+         (SELECT fr.valuation FROM FUNDING_ROUND fr WHERE fr.startup_id=s.startup_id ORDER BY fr.round_date DESC LIMIT 1) valuation,
+         COALESCE((SELECT SUM(fr.amount_raised) FROM FUNDING_ROUND fr WHERE fr.startup_id=s.startup_id),0) total_funding,
+         COALESCE((SELECT SUM(fr.target_funding) FROM FUNDING_ROUND fr WHERE fr.startup_id=s.startup_id),0) target_funding,
+         (SELECT COUNT(DISTINCT i.investor_id) FROM INVESTMENT i JOIN FUNDING_ROUND fr ON fr.round_id=i.round_id WHERE fr.startup_id=s.startup_id) total_investors,
+         COALESCE((SELECT SUM(eh.equity_percentage) FROM EQUITY_HISTORY eh WHERE eh.startup_id=s.startup_id AND eh.recorded_at=(SELECT MAX(recorded_at) FROM EQUITY_HISTORY WHERE startup_id=s.startup_id) AND eh.founder_id IS NOT NULL),0) founder_equity
+       FROM STARTUP s WHERE s.startup_id=?`,
+      [req.params.startup_id],
+    );
+    res.json(rows[0] || null);
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+// Investor-startup matching: industry fit is the primary signal; country adds a smaller preference.
+app.get("/investorMatches/:startup_id", async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT i.investor_id, i.investor_name, i.firm_name, i.investor_type, i.country,
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM INVESTOR_FOCUS_INDUSTRY fi
+                  WHERE fi.investor_id=i.investor_id AND fi.industry_id=s.industry_id
+                ) AND i.country=s.country THEN 100
+                WHEN EXISTS (
+                  SELECT 1 FROM INVESTOR_FOCUS_INDUSTRY fi
+                  WHERE fi.investor_id=i.investor_id AND fi.industry_id=s.industry_id
+                ) THEN 80
+                WHEN i.country=s.country THEN 20
+                ELSE 0
+              END AS match_score
+       FROM INVESTOR i CROSS JOIN STARTUP s
+       WHERE s.startup_id=? AND i.is_visible=1
+       ORDER BY match_score DESC, i.investor_name`,
+      [req.params.startup_id],
+    );
+    res.json(rows);
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+app.get("/allStartups", async (req, res) => {
+  const { industry_id, stage, country, q } = req.query;
+  const page = Math.max(Number(req.query.page || 1), 1);
+  const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 100);
+  const offset = (page - 1) * limit;
+  const conditions = [];
+  const values = [];
+
+  if (industry_id) { conditions.push("s.industry_id = ?"); values.push(industry_id); }
+  if (stage) { conditions.push("s.stage = ?"); values.push(stage); }
+  if (country) { conditions.push("LOWER(s.country) = LOWER(?)"); values.push(country); }
+  if (q) { conditions.push("(LOWER(s.startup_name) LIKE LOWER(?) OR LOWER(s.city) LIKE LOWER(?))"); values.push(`%${q}%`, `%${q}%`); }
+
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  try {
+    const [rows] = await pool.execute(
+      `SELECT s.startup_id, s.startup_name, s.founded_year, s.stage, s.city, s.state, s.country, s.industry_id, ind.industry_name
+       FROM STARTUP s JOIN INDUSTRY ind ON ind.industry_id=s.industry_id
+       ${where} ORDER BY s.startup_name LIMIT ? OFFSET ?`,
+      [...values, limit, offset],
+    );
+    res.json(rows);
+  } catch (error) {
+    handleDbError(res, error);
+  }
+});
+
+// Cleanup expired sessions without keeping authentication state in application memory.
+setInterval(() => {
+  pool.execute("DELETE FROM AUTH_SESSION WHERE expires_at <= NOW()").catch((error) => console.error("Session cleanup failed:", error.message));
+}, 60 * 60 * 1000).unref();
+
+app.use((req, res) => publicError(res, 404, "Endpoint not found."));
+
+async function start() {
+  try {
+    const connection = await pool.getConnection();
+    await connection.ping();
+    connection.release();
+    app.listen(PORT, () => console.log(`SFITS API running on http://localhost:${PORT}`));
+  } catch (error) {
+    console.error("Unable to connect to MySQL:", error.message);
+    process.exitCode = 1;
+  }
+}
+
+if (require.main === module) start();
+
+module.exports = { app, pool, start };
