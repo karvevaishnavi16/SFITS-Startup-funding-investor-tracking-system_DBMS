@@ -23,13 +23,7 @@ CREATE TABLE IF NOT EXISTS STARTUP (
     startup_id INT AUTO_INCREMENT PRIMARY KEY,
     startup_name VARCHAR(100) NOT NULL UNIQUE,
     founded_year YEAR NOT NULL,
-    stage ENUM(
-        'Pre-Seed',
-        'Seed',
-        'Series A',
-        'Series B',
-        'Series C'
-    ) NOT NULL,
+    stage ENUM('Pre-Seed', 'Seed', 'Series A', 'Series B', 'Series C') NOT NULL,
     city VARCHAR(50) NOT NULL,
     state VARCHAR(50) NOT NULL,
     country VARCHAR(50) NOT NULL,
@@ -48,10 +42,7 @@ CREATE TABLE IF NOT EXISTS FOUNDER (
     founder_email VARCHAR(100) NULL,
     founder_role VARCHAR(50) NOT NULL,
     initial_equity DECIMAL(5, 2) NOT NULL,
-    CONSTRAINT chk_initial_equity CHECK (
-        initial_equity > 0
-        AND initial_equity <= 100
-    ),
+    CONSTRAINT chk_initial_equity CHECK (initial_equity > 0 AND initial_equity <= 100),
     startup_id INT NOT NULL,
     user_id INT NULL,
     FOREIGN KEY (startup_id) REFERENCES STARTUP (startup_id),
@@ -65,18 +56,7 @@ CREATE TABLE IF NOT EXISTS INVESTOR (
     investor_id INT AUTO_INCREMENT PRIMARY KEY,
     investor_name VARCHAR(100) NOT NULL,
     firm_name VARCHAR(100) NOT NULL,
-    investor_type ENUM(
-        'VC',
-        'Angel',
-        'Corporate',
-        'Private Equity',
-        'Hedge Fund',
-        'Family Office',
-        'Government',
-        'Accelerator',
-        'Incubator',
-        'Crowdfunding'
-    ) NOT NULL,
+    investor_type ENUM('VC', 'Angel', 'Corporate', 'Private Equity', 'Hedge Fund', 'Family Office', 'Government', 'Accelerator', 'Incubator', 'Crowdfunding') NOT NULL,
     country VARCHAR(50) NOT NULL,
     user_id INT NULL,
     is_visible TINYINT(1) DEFAULT 1,
@@ -85,19 +65,17 @@ CREATE TABLE IF NOT EXISTS INVESTOR (
 );
 
 -- Table 5: FUNDING_ROUND
+-- target_funding and amount_raised are the canonical funding fields used by seed data.
+-- total_amount_raised is retained temporarily for backend compatibility and will be removed
+-- when the funding API is migrated to the canonical names.
 CREATE TABLE IF NOT EXISTS FUNDING_ROUND (
     round_id INT AUTO_INCREMENT PRIMARY KEY,
-    round_type ENUM(
-        'Initial',
-        'Pre-Seed',
-        'Seed',
-        'Series A',
-        'Series B',
-        'Series C'
-    ) NOT NULL,
+    round_type ENUM('Initial', 'Pre-Seed', 'Seed', 'Series A', 'Series B', 'Series C') NOT NULL,
     round_date DATE NOT NULL,
+    target_funding BIGINT UNSIGNED NOT NULL,
+    amount_raised BIGINT UNSIGNED NOT NULL,
     valuation BIGINT UNSIGNED NOT NULL,
-    total_amount_raised BIGINT UNSIGNED NOT NULL,
+    total_amount_raised BIGINT UNSIGNED NULL DEFAULT NULL,
     startup_id INT NOT NULL,
     FOREIGN KEY (startup_id) REFERENCES STARTUP (startup_id),
     INDEX idx_funding_round_startup (startup_id)
@@ -121,10 +99,7 @@ CREATE TABLE IF NOT EXISTS INVESTMENT (
     equity_acquired DECIMAL(5, 2) NOT NULL,
     investment_date DATE NOT NULL,
     deal_reference VARCHAR(255) NULL,
-    CONSTRAINT chk_equity_acquired CHECK (
-        equity_acquired > 0
-        AND equity_acquired <= 100
-    ),
+    CONSTRAINT chk_equity_acquired CHECK (equity_acquired > 0 AND equity_acquired <= 100),
     CONSTRAINT unique_investor_round UNIQUE (investor_id, round_id),
     FOREIGN KEY (investor_id) REFERENCES INVESTOR (investor_id),
     FOREIGN KEY (round_id) REFERENCES FUNDING_ROUND (round_id),
@@ -140,10 +115,7 @@ CREATE TABLE IF NOT EXISTS EQUITY_HISTORY (
     founder_id INT NULL,
     investor_id INT NULL,
     equity_percentage DECIMAL(5, 2) NOT NULL,
-    CONSTRAINT chk_equity_percentage CHECK (
-        equity_percentage > 0
-        AND equity_percentage <= 100
-    ),
+    CONSTRAINT chk_equity_percentage CHECK (equity_percentage > 0 AND equity_percentage <= 100),
     CONSTRAINT chk_stakeholder_type CHECK (
         (founder_id IS NOT NULL AND investor_id IS NULL) OR
         (founder_id IS NULL AND investor_id IS NOT NULL)
@@ -159,7 +131,7 @@ CREATE TABLE IF NOT EXISTS EQUITY_HISTORY (
     INDEX idx_equity_history_investor (investor_id)
 );
 
--- Table 9: EQUITY_HISTORY_AUDIT (Audit Log)
+-- Table 9: EQUITY_HISTORY_AUDIT
 CREATE TABLE IF NOT EXISTS EQUITY_HISTORY_AUDIT (
     audit_id INT AUTO_INCREMENT PRIMARY KEY,
     ownership_id INT NOT NULL,
@@ -170,7 +142,6 @@ CREATE TABLE IF NOT EXISTS EQUITY_HISTORY_AUDIT (
     changed_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Trigger: Log inserts into EQUITY_HISTORY
 DELIMITER $$
 CREATE TRIGGER after_equity_insert
 AFTER INSERT ON EQUITY_HISTORY
@@ -181,7 +152,6 @@ BEGIN
 END$$
 DELIMITER ;
 
--- Trigger: Log updates to EQUITY_HISTORY
 DELIMITER $$
 CREATE TRIGGER after_equity_update
 AFTER UPDATE ON EQUITY_HISTORY
