@@ -96,12 +96,29 @@ CREATE TABLE IF NOT EXISTS FUNDING_ROUND (
         'Series C'
     ) NOT NULL,
     round_date DATE NOT NULL,
+    target_funding BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    amount_raised BIGINT UNSIGNED NOT NULL DEFAULT 0,
     valuation BIGINT UNSIGNED NOT NULL,
-    total_amount_raised BIGINT UNSIGNED NOT NULL,
+    total_amount_raised BIGINT UNSIGNED NOT NULL DEFAULT 0,
     startup_id INT NOT NULL,
     FOREIGN KEY (startup_id) REFERENCES STARTUP (startup_id),
     INDEX idx_funding_round_startup (startup_id)
 );
+
+-- Keep the legacy total_amount_raised field compatible with both the seed data
+-- (which uses amount_raised) and the existing backend (which uses total_amount_raised).
+DELIMITER $$
+CREATE TRIGGER sync_funding_amounts
+BEFORE INSERT ON FUNDING_ROUND
+FOR EACH ROW
+BEGIN
+    IF NEW.amount_raised = 0 AND NEW.total_amount_raised > 0 THEN
+        SET NEW.amount_raised = NEW.total_amount_raised;
+    ELSEIF NEW.total_amount_raised = 0 AND NEW.amount_raised > 0 THEN
+        SET NEW.total_amount_raised = NEW.amount_raised;
+    END IF;
+END$$
+DELIMITER ;
 
 -- Table 6: INVESTOR_FOCUS_INDUSTRY
 CREATE TABLE IF NOT EXISTS INVESTOR_FOCUS_INDUSTRY (
@@ -119,6 +136,7 @@ CREATE TABLE IF NOT EXISTS INVESTMENT (
     round_id INT NOT NULL,
     amount_invested BIGINT UNSIGNED NOT NULL,
     equity_acquired DECIMAL(5, 2) NOT NULL,
+    investment_date DATE NULL,
     deal_reference VARCHAR(255) NULL,
     CONSTRAINT chk_equity_acquired CHECK (
         equity_acquired > 0
