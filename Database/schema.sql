@@ -65,15 +65,14 @@ CREATE TABLE IF NOT EXISTS INVESTOR (
 );
 
 -- Table 5: FUNDING_ROUND
--- target_funding and amount_raised are the canonical funding fields used by seed data.
--- total_amount_raised is retained temporarily for backend compatibility and will be removed
--- when the funding API is migrated to the canonical names.
+-- Canonical seed fields are target_funding and amount_raised.
+-- total_amount_raised remains nullable temporarily for existing backend compatibility.
 CREATE TABLE IF NOT EXISTS FUNDING_ROUND (
     round_id INT AUTO_INCREMENT PRIMARY KEY,
     round_type ENUM('Initial', 'Pre-Seed', 'Seed', 'Series A', 'Series B', 'Series C') NOT NULL,
     round_date DATE NOT NULL,
-    target_funding BIGINT UNSIGNED NOT NULL,
-    amount_raised BIGINT UNSIGNED NOT NULL,
+    target_funding BIGINT UNSIGNED NULL DEFAULT NULL,
+    amount_raised BIGINT UNSIGNED NULL DEFAULT NULL,
     valuation BIGINT UNSIGNED NOT NULL,
     total_amount_raised BIGINT UNSIGNED NULL DEFAULT NULL,
     startup_id INT NOT NULL,
