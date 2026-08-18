@@ -41,6 +41,24 @@ CREATE TABLE IF NOT EXISTS STARTUP (
     INDEX idx_startup_user (user_id)
 );
 
+CREATE TABLE IF NOT EXISTS STARTUP_SNAPSHOT (
+    startup_id INT PRIMARY KEY,
+    business_model VARCHAR(255) NULL,
+    problem_solving VARCHAR(255) NULL,
+    target_market VARCHAR(255) NULL,
+    product_summary VARCHAR(255) NULL,
+    revenue_model VARCHAR(255) NULL,
+    current_traction VARCHAR(255) NULL,
+    future_plan VARCHAR(255) NULL,
+    monthly_revenue BIGINT UNSIGNED DEFAULT 0,
+    customer_count INT UNSIGNED DEFAULT 0,
+    user_count INT UNSIGNED DEFAULT 0,
+    growth_percentage DECIMAL(5, 2) DEFAULT 0,
+    burn_rate BIGINT UNSIGNED DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (startup_id) REFERENCES STARTUP (startup_id) ON DELETE CASCADE
+);
+
 -- Table 3: FOUNDER
 CREATE TABLE IF NOT EXISTS FOUNDER (
     founder_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -98,6 +116,9 @@ CREATE TABLE IF NOT EXISTS FUNDING_ROUND (
     round_date DATE NOT NULL,
     valuation BIGINT UNSIGNED NOT NULL,
     total_amount_raised BIGINT UNSIGNED NOT NULL,
+    target_amount BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    amount_raised BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    status ENUM('Open', 'Closed', 'Completed', 'Cancelled') NOT NULL DEFAULT 'Open',
     startup_id INT NOT NULL,
     FOREIGN KEY (startup_id) REFERENCES STARTUP (startup_id),
     INDEX idx_funding_round_startup (startup_id)

@@ -90,7 +90,7 @@
               class="text-2xl font-extrabold tracking-tight"
               style="color: var(--text-primary)"
             >
-              Startup Management
+              Startup Management & Snapshot
             </h1>
             <p class="text-sm mt-1" style="color: var(--text-muted)">
               Register and manage your startups
@@ -173,18 +173,18 @@
               >
               <select id="industry" required>
                 <option value="">Select Industry</option>
-                <option value="I001">FinTech</option>
-                <option value="I002">HealthTech</option>
-                <option value="I003">EdTech</option>
-                <option value="I004">E-Commerce</option>
-                <option value="I005">FoodTech</option>
-                <option value="I006">Logistics</option>
-                <option value="I007">AgriTech</option>
-                <option value="I008">Mobility</option>
-                <option value="I009">Beauty & Fashion</option>
-                <option value="I010">SaaS</option>
-                <option value="I011">Gaming</option>
-                <option value="I012">Social Media</option>
+                <option value="1">FinTech</option>
+                <option value="2">HealthTech</option>
+                <option value="3">EdTech</option>
+                <option value="4">E-Commerce</option>
+                <option value="5">FoodTech</option>
+                <option value="6">Logistics</option>
+                <option value="7">AgriTech</option>
+                <option value="8">Mobility</option>
+                <option value="9">Beauty & Fashion</option>
+                <option value="10">SaaS</option>
+                <option value="11">Gaming</option>
+                <option value="12">Social Media</option>
               </select>
             </div>
             <div>
@@ -207,6 +207,54 @@
                 style="color: var(--text-secondary)"
                 >Country</label
               ><input id="country" type="text" placeholder="India" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Business Model</label>
+              <input id="business_model" type="text" placeholder="B2B SaaS / Marketplace" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Problem Solving</label>
+              <input id="problem_solving" type="text" placeholder="What pain point is tracked" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Target Market</label>
+              <input id="target_market" type="text" placeholder="SMBs / students / hospitals" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Product Summary</label>
+              <input id="product_summary" type="text" placeholder="Short product note" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Revenue Model</label>
+              <input id="revenue_model" type="text" placeholder="Subscription / commission" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Current Traction</label>
+              <input id="current_traction" type="text" placeholder="Pilot users / early revenue" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Future Plan</label>
+              <input id="future_plan" type="text" placeholder="Next milestone" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Monthly Revenue</label>
+              <input id="monthly_revenue" type="number" min="0" placeholder="0" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Customers</label>
+              <input id="customer_count" type="number" min="0" placeholder="0" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Users</label>
+              <input id="user_count" type="number" min="0" placeholder="0" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Growth %</label>
+              <input id="growth_percentage" type="number" step="0.01" placeholder="0" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color: var(--text-secondary)">Burn Rate</label>
+              <input id="burn_rate" type="number" min="0" placeholder="0" />
             </div>
             <div class="flex items-end">
               <button class="btn btn-gradient w-full">
@@ -257,6 +305,7 @@
 
     <script>
       const table = document.getElementById("startupTable");
+      let startupsData = [];
       window.onload = function () {
         const user_id = localStorage.getItem("user_id");
         if (!user_id) {
@@ -273,6 +322,7 @@
           const res = await fetch(`http://localhost:5000/startups/${user_id}`);
           if (!res.ok) throw new Error("API failed");
           const data = await res.json();
+          startupsData = data;
           table.innerHTML = "";
           if (data.length === 0) {
             table.innerHTML = `<tr><td colspan="6" class="text-center py-8" style="color:var(--text-muted);">No startups yet - add your first one above.</td></tr>`;
@@ -284,7 +334,7 @@
               <td>${s.founded_year}</td>
               <td><span class="badge badge-blue">${s.stage}</span></td>
               <td>${s.city || "-"}</td><td>${s.country || "-"}</td>
-              <td><button onclick="selectStartup('${s.startup_id}', '${s.startup_name.replace(/'/g, "\\'")}')" class="btn btn-primary btn-sm">✓ Select</button></td>
+              <td><button onclick="selectStartup('${s.startup_id}', '${s.startup_name.replace(/'/g, "\\'")}')" class="btn btn-primary btn-sm">Select</button> <button onclick="editStartup('${s.startup_id}')" class="btn btn-purple btn-sm">Edit</button> <button onclick="deleteStartup('${s.startup_id}')" class="btn btn-sm">Delete</button></td>
             </tr>`;
           });
         } catch (err) {
@@ -312,6 +362,18 @@
               state: document.getElementById("state").value,
               country: document.getElementById("country").value,
               user_id,
+              business_model: document.getElementById("business_model").value,
+              problem_solving: document.getElementById("problem_solving").value,
+              target_market: document.getElementById("target_market").value,
+              product_summary: document.getElementById("product_summary").value,
+              revenue_model: document.getElementById("revenue_model").value,
+              current_traction: document.getElementById("current_traction").value,
+              future_plan: document.getElementById("future_plan").value,
+              monthly_revenue: document.getElementById("monthly_revenue").value,
+              customer_count: document.getElementById("customer_count").value,
+              user_count: document.getElementById("user_count").value,
+              growth_percentage: document.getElementById("growth_percentage").value,
+              burn_rate: document.getElementById("burn_rate").value,
             };
             const res = await fetch("http://localhost:5000/addStartup", {
               method: "POST",
@@ -331,6 +393,36 @@
           }
         });
 
+
+      async function editStartup(id) {
+        const s = startupsData.find((item) => String(item.startup_id) === String(id));
+        if (!s) return alert("Startup not found");
+        const startup_name = prompt("Startup name", s.startup_name);
+        if (!startup_name) return;
+        const founded_year = prompt("Founded year", s.founded_year) || s.founded_year;
+        const stage = prompt("Stage", s.stage) || s.stage;
+        const city = prompt("City", s.city || "") || "";
+        const state = prompt("State", s.state || "") || "";
+        const country = prompt("Country", s.country || "") || "";
+        const industry_id = prompt("Industry ID", s.industry_id || "1") || s.industry_id || "1";
+        const res = await fetch("http://localhost:5000/updateStartup", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + localStorage.getItem("token") },
+          body: JSON.stringify({ startup_id: s.startup_id, startup_name, founded_year, stage, city, state, country, industry_id }),
+        });
+        alert(res.ok ? "Startup updated" : await res.text());
+        loadStartups();
+      }
+
+      async function deleteStartup(id) {
+        if (!confirm("Delete this startup? Related records may also be removed by database constraints.")) return;
+        const res = await fetch(`http://localhost:5000/deleteStartup/${id}`, {
+          method: "DELETE",
+          headers: { "Authorization": "Bearer " + localStorage.getItem("token") },
+        });
+        alert(res.ok ? "Startup deleted" : await res.text());
+        loadStartups();
+      }
       function selectStartup(id, name) {
         localStorage.setItem("startup_id", id);
         localStorage.setItem("startup_name", name);
@@ -372,3 +464,7 @@
     </script>
   </body>
 </html>
+
+
+
+

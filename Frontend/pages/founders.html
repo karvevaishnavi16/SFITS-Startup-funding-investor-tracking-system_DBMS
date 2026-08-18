@@ -206,6 +206,7 @@
                   <th>Role</th>
                   <th>Startup</th>
                   <th>Equity (%)</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody id="founderTable"></tbody>
@@ -328,15 +329,43 @@
           const table = document.getElementById("founderTable");
           table.innerHTML = "";
           if (data.length === 0) {
-            table.innerHTML = `<tr><td colspan="4" class="text-center py-8" style="color:var(--text-muted);">No founders yet</td></tr>`;
+            table.innerHTML = `<tr><td colspan="5" class="text-center py-8" style="color:var(--text-muted);">No founders yet</td></tr>`;
             return;
           }
           data.forEach((f) => {
-            table.innerHTML += `<tr><td class="font-semibold" style="color:var(--text-primary);">${f.founder_name}</td><td>${f.founder_role || "-"}</td><td><span class="badge badge-blue">${f.startup_name}</span></td><td><span class="font-bold" style="color:var(--accent-purple);">${f.initial_equity}%</span></td></tr>`;
+            table.innerHTML += `<tr><td class="font-semibold" style="color:var(--text-primary);">${f.founder_name}</td><td>${f.founder_role || "-"}</td><td><span class="badge badge-blue">${f.startup_name}</span></td><td><span class="font-bold" style="color:var(--accent-purple);">${f.initial_equity}%</span></td><td><button onclick="editFounder('${f.founder_id}')" class="btn btn-purple btn-sm">Edit</button> <button onclick="deleteFounder('${f.founder_id}')" class="btn btn-sm">Delete</button></td></tr>`;
           });
         } catch (err) {
           console.error("Failed:", err);
         }
+      }
+
+      async function editFounder(id) {
+        const f = foundersData.find((item) => String(item.founder_id) === String(id));
+        if (!f) return alert("Founder not found");
+        const founder_name = prompt("Founder name", f.founder_name);
+        if (!founder_name) return;
+        const founder_email = prompt("Email", f.founder_email || "") || "";
+        const founder_role = prompt("Role", f.founder_role || "") || "";
+        const initial_equity = prompt("Equity %", f.initial_equity);
+        if (!initial_equity) return;
+        const res = await fetch(`${API_BASE}/updateFounder`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + localStorage.getItem("token") },
+          body: JSON.stringify({ founder_id: f.founder_id, founder_name, founder_email, founder_role, initial_equity }),
+        });
+        alert(res.ok ? "Founder updated" : await res.text());
+        loadFounders();
+      }
+
+      async function deleteFounder(id) {
+        if (!confirm("Delete this founder?")) return;
+        const res = await fetch(`${API_BASE}/deleteFounder/${id}`, {
+          method: "DELETE",
+          headers: { "Authorization": "Bearer " + localStorage.getItem("token") },
+        });
+        alert(res.ok ? "Founder deleted" : await res.text());
+        loadFounders();
       }
     </script>
   <script>
@@ -360,3 +389,6 @@
 </script>
 </body>
 </html>
+
+
+

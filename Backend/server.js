@@ -39,7 +39,7 @@ db.connect((err) => {
   if (err) return console.error(err);
   console.log("MySQL Connected");
 
-  function ensureColumn(tableName, columnName, alterSql) {
+  function ensureColumn(tableName, columnName, alterSql, done = () => {}) {
     db.query(
       `SHOW COLUMNS FROM ${tableName} LIKE ?`,
       [columnName],
@@ -60,7 +60,10 @@ db.connect((err) => {
               );
             }
             console.log(`Added missing ${tableName}.${columnName} column`);
+              done();
           });
+        } else {
+          done();
         }
       },
     );
@@ -95,9 +98,54 @@ db.connect((err) => {
     "is_visible",
     "ALTER TABLE INVESTOR ADD COLUMN is_visible TINYINT(1) DEFAULT 1",
   );
+  ensureColumn(
+    "FUNDING_ROUND",
+    "target_amount",
+    "ALTER TABLE FUNDING_ROUND ADD COLUMN target_amount BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER total_amount_raised",
+    () => ensureColumn(
+      "FUNDING_ROUND",
+      "amount_raised",
+      "ALTER TABLE FUNDING_ROUND ADD COLUMN amount_raised BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER target_amount",
+      () => ensureColumn(
+        "FUNDING_ROUND",
+        "status",
+        "ALTER TABLE FUNDING_ROUND ADD COLUMN status ENUM('Open', 'Closed', 'Completed', 'Cancelled') NOT NULL DEFAULT 'Open' AFTER amount_raised",
+        () => {
+          db.query("UPDATE FUNDING_ROUND SET target_amount = total_amount_raised WHERE target_amount = 0");
+          db.query(`UPDATE FUNDING_ROUND fr
+            LEFT JOIN (
+              SELECT round_id, COALESCE(SUM(amount_invested), 0) AS raised
+              FROM INVESTMENT
+              GROUP BY round_id
+            ) i ON fr.round_id = i.round_id
+            SET fr.amount_raised = COALESCE(i.raised, 0)`);
+        },
+      ),
+    ),
+  );
+
+  db.query(`CREATE TABLE IF NOT EXISTS STARTUP_SNAPSHOT (
+    startup_id INT PRIMARY KEY,
+    business_model VARCHAR(255) NULL,
+    problem_solving VARCHAR(255) NULL,
+    target_market VARCHAR(255) NULL,
+    product_summary VARCHAR(255) NULL,
+    revenue_model VARCHAR(255) NULL,
+    current_traction VARCHAR(255) NULL,
+    future_plan VARCHAR(255) NULL,
+    monthly_revenue BIGINT UNSIGNED DEFAULT 0,
+    customer_count INT UNSIGNED DEFAULT 0,
+    user_count INT UNSIGNED DEFAULT 0,
+    growth_percentage DECIMAL(5, 2) DEFAULT 0,
+    burn_rate BIGINT UNSIGNED DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (startup_id) REFERENCES STARTUP (startup_id) ON DELETE CASCADE
+  )`);
+
 
   // Γ£à ONE-TIME FIX: Make sure all existing investors are visible
   db.query("UPDATE INVESTOR SET is_visible = 1 WHERE is_visible IS NULL OR is_visible = 0");
+
 
   // Seed INDUSTRY table if empty///////////////////////
   db.query("SELECT COUNT(*) AS cnt FROM INDUSTRY", (err, res) => {
@@ -106,7 +154,7 @@ db.connect((err) => {
     if (res[0].cnt === 0) {
       db.query(
         `INSERT IGNORE INTO INDUSTRY (industry_id, industry_name) VALUES
-         ('I001','FinTech'),('I002','HealthTech'),('I003','EdTech')`,
+         (1,'FinTech'),(2,'HealthTech'),(3,'EdTech')`,
         (insertErr) => {
           if (insertErr)
             return console.error("Industry seed failed:", insertErr.message);
@@ -162,78 +210,84 @@ app.post("/login", (req, res) => {
     [email],
     (err, result) => {
       if (err) return res.status(500).send(err.sqlMessage || "Login failed");
-
       if (result.length === 0) return res.status(401).send("Invalid email or password");
 
       const user = result[0];
-
-      bcrypt.compare(password, user.password, (err, isMatch) => {
-        if (err) return res.status(500).send("Error comparing passwords");
-        
-        if (!isMatch) {
-          return res.status(401).send("Invalid email or password");
-        }
-
-      if (user.email) {
-        db.query(
-          "UPDATE FOUNDER SET user_id = ? WHERE TRIM(LOWER(founder_email)) = TRIM(LOWER(?)) AND user_id IS NULL",
-          [user.user_id, user.email],
-          (updateErr) => {
-            if (updateErr)
-              console.warn("Founder auto-link failed:", updateErr.sqlMessage);
-          },
-        );
-      }
-
       const sendLogin = (investorId) => {
-        const token = crypto.randomBytes(32).toString('hex');
+        const token = crypto.randomBytes(32).toString("hex");
         sessions.set(token, { user_id: user.user_id, role: user.role });
-        
+
         res.json({
           user_id: user.user_id,
           username: user.username,
           role: user.role,
           investor_id: investorId || null,
-          token: token
+          token,
         });
       };
 
-      if (user.role === "investor" && !user.investor_id) {
-        db.query(
-          "UPDATE INVESTOR SET user_id = ? WHERE TRIM(LOWER(investor_name)) = TRIM(LOWER(?)) AND user_id IS NULL",
-          [user.user_id, user.username],
-          (linkErr) => {
-            if (linkErr) {
-              console.warn("Investor auto-link failed:", linkErr.sqlMessage);
-              return sendLogin(null);
+      const finishLogin = () => {
+        if (user.email) {
+          db.query(
+            "UPDATE FOUNDER SET user_id = ? WHERE TRIM(LOWER(founder_email)) = TRIM(LOWER(?)) AND user_id IS NULL",
+            [user.user_id, user.email],
+            (updateErr) => {
+              if (updateErr) console.warn("Founder auto-link failed:", updateErr.sqlMessage);
+            },
+          );
+        }
+
+        if (user.role === "investor" && !user.investor_id) {
+          db.query(
+            "UPDATE INVESTOR SET user_id = ? WHERE TRIM(LOWER(investor_name)) = TRIM(LOWER(?)) AND user_id IS NULL",
+            [user.user_id, user.username],
+            (linkErr) => {
+              if (linkErr) {
+                console.warn("Investor auto-link failed:", linkErr.sqlMessage);
+                return sendLogin(null);
+              }
+
+              db.query(
+                "SELECT investor_id FROM INVESTOR WHERE user_id = ? LIMIT 1",
+                [user.user_id],
+                (invErr, invRes) => {
+                  if (invErr) {
+                    console.warn("Investor fetch after auto-link failed:", invErr.sqlMessage);
+                    return sendLogin(null);
+                  }
+                  sendLogin(invRes[0]?.investor_id || null);
+                },
+              );
+            },
+          );
+          return;
+        }
+
+        sendLogin(user.investor_id);
+      };
+
+      bcrypt.compare(password, user.password, (compareErr, isMatch) => {
+        const plainSeedMatch = password === user.password;
+        if (!isMatch && !plainSeedMatch) {
+          return res.status(401).send("Invalid email or password");
+        }
+
+        if (plainSeedMatch) {
+          bcrypt.hash(password, 10, (hashErr, hash) => {
+            if (!hashErr) {
+              db.query("UPDATE USERS SET password=? WHERE user_id=?", [hash, user.user_id]);
             }
+            finishLogin();
+          });
+          return;
+        }
 
-            db.query(
-              "SELECT investor_id FROM INVESTOR WHERE user_id = ? LIMIT 1",
-              [user.user_id],
-              (invErr, invRes) => {
-                if (invErr) {
-                  console.warn(
-                    "Investor fetch after auto-link failed:",
-                    invErr.sqlMessage,
-                  );
-                  return sendLogin(null);
-                }
-
-                sendLogin(invRes[0]?.investor_id || null);
-              },
-            );
-          },
-        );
-        return;
-      }
-
-      sendLogin(user.investor_id);
+        if (compareErr) return res.status(500).send("Error comparing passwords");
+        finishLogin();
       });
     },
   );
 });
-
 // ================= STARTUPS =================
 app.post("/addStartup", requireAuth, (req, res) => {
   const {
@@ -245,6 +299,18 @@ app.post("/addStartup", requireAuth, (req, res) => {
     state,
     country,
     user_id,
+    business_model,
+    problem_solving,
+    target_market,
+    product_summary,
+    revenue_model,
+    current_traction,
+    future_plan,
+    monthly_revenue,
+    customer_count,
+    user_count,
+    growth_percentage,
+    burn_rate,
   } = req.body;
 
   db.query(
@@ -259,9 +325,18 @@ app.post("/addStartup", requireAuth, (req, res) => {
       industry_id,
       user_id,
     ],
-    (err) => {
+    (err, result) => {
       if (err) return res.status(500).send(err.sqlMessage);
-      res.send("Startup added");
+      db.query(
+        `INSERT INTO STARTUP_SNAPSHOT
+         (startup_id, business_model, problem_solving, target_market, product_summary, revenue_model, current_traction, future_plan, monthly_revenue, customer_count, user_count, growth_percentage, burn_rate)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [result.insertId, business_model || null, problem_solving || null, target_market || null, product_summary || null, revenue_model || null, current_traction || null, future_plan || null, monthly_revenue || 0, customer_count || 0, user_count || 0, growth_percentage || 0, burn_rate || 0],
+        (snapshotErr) => {
+          if (snapshotErr) return res.status(500).send(snapshotErr.sqlMessage);
+          res.send("Startup added");
+        },
+      );
     },
   );
 });
@@ -282,6 +357,68 @@ app.get("/startups/:user_id", (req, res) => {
   );
 });
 
+
+app.put("/updateStartup", requireAuth, (req, res) => {
+  const { startup_id, startup_name, founded_year, stage, industry_id, city, state, country } = req.body;
+  db.query(
+    `UPDATE STARTUP
+     SET startup_name=?, founded_year=?, stage=?, city=?, state=?, country=?, industry_id=?
+     WHERE startup_id=? AND user_id=?`,
+    [startup_name, founded_year, stage, city, state, country, industry_id, startup_id, req.user.user_id],
+    (err, result) => {
+      if (err) return res.status(500).send(err.sqlMessage);
+      if (result.affectedRows === 0) return res.status(403).send("Startup not found or not allowed");
+      res.send("Startup updated");
+    },
+  );
+});
+
+app.delete("/deleteStartup/:id", requireAuth, (req, res) => {
+  db.query(
+    "DELETE FROM STARTUP WHERE startup_id=? AND user_id=?",
+    [req.params.id, req.user.user_id],
+    (err, result) => {
+      if (err) return res.status(500).send(err.sqlMessage);
+      if (result.affectedRows === 0) return res.status(403).send("Startup not found or not allowed");
+      res.send("Startup deleted");
+    },
+  );
+});
+
+app.get("/startupSnapshot/:startup_id", requireAuth, (req, res) => {
+  db.query(
+    "SELECT * FROM STARTUP_SNAPSHOT WHERE startup_id=?",
+    [req.params.startup_id],
+    (err, result) => {
+      if (err) return res.status(500).send(err.sqlMessage);
+      res.json(result[0] || {});
+    },
+  );
+});
+
+app.put("/startupSnapshot", requireAuth, (req, res) => {
+  const fields = [
+    "startup_id", "business_model", "problem_solving", "target_market", "product_summary",
+    "revenue_model", "current_traction", "future_plan", "monthly_revenue", "customer_count",
+    "user_count", "growth_percentage", "burn_rate",
+  ];
+  const values = fields.map((field) => req.body[field] ?? null);
+  db.query(
+    `INSERT INTO STARTUP_SNAPSHOT
+     (startup_id, business_model, problem_solving, target_market, product_summary, revenue_model, current_traction, future_plan, monthly_revenue, customer_count, user_count, growth_percentage, burn_rate)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       business_model=VALUES(business_model), problem_solving=VALUES(problem_solving), target_market=VALUES(target_market),
+       product_summary=VALUES(product_summary), revenue_model=VALUES(revenue_model), current_traction=VALUES(current_traction),
+       future_plan=VALUES(future_plan), monthly_revenue=VALUES(monthly_revenue), customer_count=VALUES(customer_count),
+       user_count=VALUES(user_count), growth_percentage=VALUES(growth_percentage), burn_rate=VALUES(burn_rate)`,
+    values,
+    (err) => {
+      if (err) return res.status(500).send(err.sqlMessage);
+      res.send("Startup Snapshot saved");
+    },
+  );
+});
 // ================= FOUNDERS =================
 app.post("/addFounder", requireAuth, (req, res) => {
   const { founders, startup_id } = req.body;
@@ -444,14 +581,44 @@ app.get("/founders/:user_id", (req, res) => {
   );
 });
 
+
+app.put("/updateFounder", requireAuth, (req, res) => {
+  const { founder_id, founder_name, founder_email, founder_role, initial_equity } = req.body;
+  db.query(
+    `UPDATE FOUNDER f
+     JOIN STARTUP s ON f.startup_id = s.startup_id
+     SET f.founder_name=?, f.founder_email=?, f.founder_role=?, f.initial_equity=?
+     WHERE f.founder_id=? AND (s.user_id=? OR f.user_id=?)`,
+    [founder_name, founder_email, founder_role, initial_equity, founder_id, req.user.user_id, req.user.user_id],
+    (err, result) => {
+      if (err) return res.status(500).send(err.sqlMessage);
+      if (result.affectedRows === 0) return res.status(403).send("Founder not found or not allowed");
+      res.send("Founder updated");
+    },
+  );
+});
+
+app.delete("/deleteFounder/:id", requireAuth, (req, res) => {
+  db.query(
+    `DELETE f FROM FOUNDER f
+     JOIN STARTUP s ON f.startup_id = s.startup_id
+     WHERE f.founder_id=? AND (s.user_id=? OR f.user_id=?)`,
+    [req.params.id, req.user.user_id, req.user.user_id],
+    (err, result) => {
+      if (err) return res.status(500).send(err.sqlMessage);
+      if (result.affectedRows === 0) return res.status(403).send("Founder not found or not allowed");
+      res.send("Founder deleted");
+    },
+  );
+});
 // ================= FUNDING =================
 app.post("/addFunding", requireAuth, (req, res) => {
-  const { startup_id, round_type, round_date, valuation, total_amount_raised } =
+  const { startup_id, round_type, round_date, valuation, total_amount_raised, target_amount, status } =
     req.body;
 
   // Get all existing funding rounds for this startup
   db.query(
-    `SELECT round_type, round_date FROM FUNDING_ROUND WHERE startup_id = ? ORDER BY round_date ASC`,
+    `SELECT round_type, round_date, status FROM FUNDING_ROUND WHERE startup_id = ? ORDER BY round_date ASC`,
     [startup_id],
     (err, existingRounds) => {
       if (err) return res.status(500).send(err.sqlMessage);
@@ -503,12 +670,14 @@ app.post("/addFunding", requireAuth, (req, res) => {
       }
 
       db.query(
-        `INSERT INTO FUNDING_ROUND (round_type, round_date, valuation, total_amount_raised, startup_id) VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO FUNDING_ROUND (round_type, round_date, valuation, total_amount_raised, target_amount, amount_raised, status, startup_id) VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
         [
           round_type,
           new Date(round_date).toISOString().slice(0, 10),
           valuation,
-          total_amount_raised,
+          total_amount_raised || target_amount || 0,
+          target_amount || total_amount_raised || 0,
+          status || "Open",
           startup_id,
         ],
         (err) => {
@@ -522,7 +691,7 @@ app.post("/addFunding", requireAuth, (req, res) => {
 
 app.get("/fundingRounds/:startup_id", (req, res) => {
   db.query(
-    `SELECT round_type, round_date FROM FUNDING_ROUND WHERE startup_id = ? ORDER BY round_date ASC`,
+    `SELECT round_type, round_date, status FROM FUNDING_ROUND WHERE startup_id = ? ORDER BY round_date ASC`,
     [req.params.startup_id],
     (err, result) => {
       if (err) return res.status(500).send(err.sqlMessage);
@@ -535,7 +704,7 @@ app.get("/fundingRounds/:startup_id", (req, res) => {
 app.get("/funding/:user_id", (req, res) => {
   const uid = req.params.user_id;
   db.query(
-    `SELECT DISTINCT fr.*, s.startup_name
+    `SELECT DISTINCT fr.*, COALESCE(NULLIF(fr.target_amount, 0), fr.total_amount_raised) AS target_funding, fr.amount_raised, s.startup_name
      FROM FUNDING_ROUND fr
      JOIN STARTUP s ON fr.startup_id = s.startup_id
      LEFT JOIN FOUNDER f ON s.startup_id = f.startup_id
@@ -664,8 +833,8 @@ app.post("/addInvestment", requireAuth, (req, res) => {
         if (invRes.length === 0) {
           getInvestorPromise = new Promise((resolve, reject) => {
             db.query(
-              `INSERT INTO INVESTOR (investor_name, firm_name, country, user_id) VALUES (?, ?, ?, ?)`,
-              [username || "Investor", firm_name || "Individual", country || "India", user_id],
+              `INSERT INTO INVESTOR (investor_name, firm_name, investor_type, country, user_id) VALUES (?, ?, ?, ?, ?)`,
+              [username || "Investor", firm_name || "Individual", "Angel", country || "India", user_id],
               (err2, result) => {
                 if (err2) reject(err2);
                 else resolve(result.insertId);
@@ -769,9 +938,12 @@ app.post("/addInvestment", requireAuth, (req, res) => {
                             (err) => {
                               if (err) return rollbackAndSend(err);
 
-                              db.commit((err) => {
-                                if (err) return rollbackAndSend(err);
-                                res.send("Investment added successfully");
+                              db.query("UPDATE FUNDING_ROUND SET amount_raised = amount_raised + ? WHERE round_id = ?", [amount, round_id], (raiseErr) => {
+                                if (raiseErr) return rollbackAndSend(raiseErr);
+                                db.commit((err) => {
+                                  if (err) return rollbackAndSend(err);
+                                  res.send("Investment record saved successfully");
+                                });
                               });
                             }
                           );
@@ -1010,7 +1182,8 @@ app.get("/allRounds", (req, res) => {
        fr.round_type,
        fr.round_date,
        fr.valuation,
-       fr.total_amount_raised AS target_funding,
+       COALESCE(NULLIF(fr.target_amount, 0), fr.total_amount_raised) AS target_funding,
+       fr.status,
        s.startup_id,
        s.startup_name,
        s.stage,
@@ -1215,10 +1388,10 @@ app.get("/startupDashboard/:startup_id", (req, res) => {
       WHERE fr.startup_id = s.startup_id
       ) AS total_funding,
 
-      (SELECT COALESCE(SUM(fr.total_amount_raised),0)
+      (SELECT COALESCE(SUM(COALESCE(NULLIF(fr.target_amount, 0), fr.total_amount_raised)),0)
       FROM FUNDING_ROUND fr
       WHERE fr.startup_id = s.startup_id
-      AND fr.total_amount_raised > 0
+      AND COALESCE(NULLIF(fr.target_amount, 0), fr.total_amount_raised) > 0
       ) AS target_funding,
 
       -- Γ£à CORRECT total investors
@@ -1265,3 +1438,19 @@ app.listen(5000, () => {
   console.log("Backend file:", __filename);
   console.log("Working directory:", process.cwd());
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

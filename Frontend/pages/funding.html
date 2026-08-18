@@ -178,6 +178,19 @@
                 required
               />
             </div>
+            <div>
+              <label
+                class="block text-xs font-semibold mb-1"
+                style="color: var(--text-secondary)"
+                >Status</label
+              >
+              <select id="status" required>
+                <option>Open</option>
+                <option>Closed</option>
+                <option>Completed</option>
+                <option>Cancelled</option>
+              </select>
+            </div>
             <div class="flex items-end">
               <button type="submit" class="btn btn-gradient w-full">
                 <i class="ri-bank-card-line"></i> Add Round
@@ -214,6 +227,8 @@
                   <th>Date</th>
                   <th>Valuation</th>
                   <th>Funding Goal</th>
+                  <th>Raised</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody id="fundingTable"></tbody>
@@ -346,6 +361,8 @@
             round_date: document.getElementById("date").value,
             valuation: document.getElementById("valuation").value,
             total_amount_raised: document.getElementById("amount").value,
+            target_amount: document.getElementById("amount").value,
+            status: document.getElementById("status").value,
           }),
         });
 
@@ -367,7 +384,7 @@
 
         table.innerHTML = "";
         if (data.length === 0) {
-          table.innerHTML = `<tr><td colspan="5" class="text-center py-8" style="color:var(--text-muted);">No funding rounds yet</td></tr>`;
+          table.innerHTML = `<tr><td colspan="7" class="text-center py-8" style="color:var(--text-muted);">No funding rounds yet</td></tr>`;
           return;
         }
 
@@ -381,7 +398,7 @@
         };
 
         data.forEach((round) => {
-          table.innerHTML += `<tr><td class="font-semibold" style="color:var(--text-primary);">${round.startup_name}</td><td><span class="badge ${roundColors[round.round_type] || "badge-blue"}">${round.round_type}</span></td><td>${round.round_date}</td><td><span class="font-bold" style="color:var(--accent-blue);">Rs ${Number(round.valuation).toLocaleString()}</span></td><td><span class="font-bold" style="color:var(--accent-green);">Rs ${Number(round.total_amount_raised).toLocaleString()}</span></td></tr>`;
+          table.innerHTML += `<tr><td class="font-semibold" style="color:var(--text-primary);">${round.startup_name}</td><td><span class="badge ${roundColors[round.round_type] || "badge-blue"}">${round.round_type}</span></td><td>${round.round_date}</td><td><span class="font-bold" style="color:var(--accent-blue);">Rs ${Number(round.valuation).toLocaleString()}</span></td><td><span class="font-bold" style="color:var(--accent-green);">Rs ${Number(round.target_funding || round.total_amount_raised).toLocaleString()}</span></td><td>Rs ${Number(round.amount_raised || 0).toLocaleString()}</td><td><span class="badge badge-teal">${round.status || "Open"}</span></td></tr>`;
         });
       }
     </script>
@@ -420,3 +437,5 @@
     </script>
   </body>
 </html>
+
+

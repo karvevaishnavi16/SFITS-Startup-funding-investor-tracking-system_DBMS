@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Invest - SFITS</title>
-    <meta name="description" content="Make informed investment decisions. View live funding rounds, valuation, and funding goals before investing." />
+    <title>Record Investment - SFITS</title>
+    <meta name="description" content="Make informed investment decisions. View live funding rounds, valuation, and funding goals before recording." />
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="../styles.css" />
     <script src="../theme.js"></script>
@@ -87,7 +87,7 @@
         <ul class="sidebar-nav">
           <li><a href="../investor_dashboard.html"><span class="nav-icon"><i class="ri-dashboard-line"></i></span> Dashboard</a></li>
           <li><a href="browse_startups.html"><span class="nav-icon"><i class="ri-search-line"></i></span> Startup Directory</a></li>
-          <li><a href="invest.html" class="active"><span class="nav-icon"><i class="ri-coins-line"></i></span> Invest</a></li>
+          <li><a href="invest.html" class="active"><span class="nav-icon"><i class="ri-coins-line"></i></span> Record Investment</a></li>
           <li><a href="my_investments.html"><span class="nav-icon"><i class="ri-bar-chart-box-line"></i></span> My Investments</a></li>
         </ul>
         <div class="sidebar-bottom"><a href="../welcome.html" onclick="localStorage.clear()"><i class="ri-logout-box-r-line"></i> Logout</a></div>
@@ -99,9 +99,9 @@
           <div>
             <div class="role-badge investor mb-2"><i class="ri-line-chart-line"></i> Investor Panel</div>
             <h1 class="text-2xl font-extrabold tracking-tight" style="color:var(--text-primary);">
-              Log a New <span style="background:var(--gradient-green);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">Investment</span>
+              Record a Finalized <span style="background:var(--gradient-green);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">Investment</span>
             </h1>
-            <p class="text-sm mt-1" style="color:var(--text-muted);">Select a live funding round and review all context before committing capital</p>
+            <p class="text-sm mt-1" style="color:var(--text-muted);">Select a funding round and review all context before saving the record</p>
           </div>
         </div>
 
@@ -109,7 +109,7 @@
         <div class="grid grid-cols-1 lg:grid-cols-5 gap-6 animate-fade-in-up delay-1">
           <!-- Investment Form -->
           <div class="lg:col-span-3 form-section" style="margin:0;">
-            <h2 class="section-title"><i class="ri-focus-3-line"></i> Make an Investment</h2>
+            <h2 class="section-title"><i class="ri-focus-3-line"></i> Record an Investment</h2>
 
             <div id="selectedStartupBanner" class="mb-4" style="display:none;padding:0.9rem 1rem;border-radius:16px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.14);color:var(--accent-indigo);font-weight:600;"></div>
 
@@ -267,7 +267,7 @@
         // Banner
         if (selectedStartupId && selectedStartupName) {
           banner.style.display = "block";
-          banner.innerHTML = `<i class="ri-building-4-line"></i> Investing in <strong>${selectedStartupName}</strong>`;
+          banner.innerHTML = `<i class="ri-building-4-line"></i> Recording for <strong>${selectedStartupName}</strong>`;
         } else {
           banner.style.display = "none";
         }
@@ -450,3 +450,5 @@
 </script>
 </body>
 </html>
+
+
