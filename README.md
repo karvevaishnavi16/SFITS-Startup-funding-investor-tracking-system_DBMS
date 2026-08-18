@@ -105,7 +105,7 @@ Adding a new investment requires updating multiple tables. We use SQL transactio
 
 ---
 ## ER Diagram 
-<img width="1611" height="1051" alt="image" src="<img width="1348" height="1043" alt="WhatsApp Image 2026-08-18 at 7 38 42 PM" src="https://github.com/user-attachments/assets/4c06df19-dea7-4fdd-b279-2e2ca57c33b6" />
+<img width="1348" height="1043" alt="WhatsApp Image 2026-08-18 at 7 38 42 PM" src="https://github.com/user-attachments/assets/4c06df19-dea7-4fdd-b279-2e2ca57c33b6" />
 " />
 
 ## ⚙️ System Architecture
